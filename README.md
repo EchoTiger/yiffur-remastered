@@ -1,6 +1,9 @@
 # Yiffur Remastered (v2.1.0)
 
-A ground-up 2026 Kotlin + Jetpack Compose rewrite of **Yiffur**, the native Android client for [e926.net](https://e926.net) and [e621.net](https://e621.net) — engineered for ultra-low CPU load, seamless background adaptation on constrained/older devices (Android 7.0+ / API 24+), and gold-standard media rendering on modern flagships.
+A ground-up 2026 Kotlin + Jetpack Compose rewrite of **Yiffur**, the native Android client for [e926.net](https://e926.net) and [e621.net](https://e621.net) 
+Engineered for ultra-low CPU load, seamless background adaptation on constrained/older devices (Android 7.0+ / API 24+), and gold-standard media rendering on modern flagships.
+
+This is a ground-up remaster of the old Yiffur project from 2019.
 
 ## Highlights
 
