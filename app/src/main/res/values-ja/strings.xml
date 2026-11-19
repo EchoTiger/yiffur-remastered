@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Yiffur</string>
+    <string name="creditText">開発者とデザイナー\n@twitter - EchoTiger\n@discord - EchoTiger#1447\n@furaffinity - bsmx93 // echotiger</string>
+    <string name="creditTextPhil">Philによるドイツ語の翻訳\n@discord - Phil | Flipper#3621\n@e621 - Flipper\n@furaffinity - FlipperLP</string>
+    <string name="creditTextAljninja">Aljninjaによるスペイン語の翻訳\n@discord - Aljninja#5731</string>
+    <string name="creditTextMaxwell">Maxwell Longtailによるポーランド語の翻訳\n@discord - MultiDaxio#4432</string>
+    <string name="creditTextDoges">Dogesによるポルトガル語の翻訳\n@twitter - xDoges\n@discord - Doges#5183</string>
+    <string name="creditTextHandshake">Handshakeによる韓国語の翻訳\n@discord - Handshake#0001</string>
+    <string name="creditTextLetestroll">Letestrollによるフランス語の翻訳\n@furaffinity - letestroll</string>
+    <string name="creditTextBribi">Bribiによるイタリア語の翻訳\n@discord - bribi#5940</string>
+    <string name="creditTextAstroNoot">AstroNootによるルーマニア語の翻訳\n@twitter - AstroNoot88</string>
+    <string name="creditTextBurton">MxBurtonによるロシア語の翻訳\n@discord - mxburton#3985</string>
+    <string name="creditTextLalkin">！Xyрмаによるロシア語の翻訳\n@discord - lalkin#8671</string>
+    <string name="creditTextNaughtyVaporeon">Naughty Vaporeonによる繁体字中国語\n@discord - Naughty Vaporeon#6660\n@twitter - RainVaporeon</string>
+    <string name="creditTextMisterCake">MisterCakeによるブルガリア語の翻訳\n@twitter - Cake4Mister\n@e621 - MisterCake</string>
+    <string name="creditTextNightKey">NightKeyによるハンガリー語の翻訳\n@discord - Night Key#7326</string>
+    <string name="creditTextTigerKing">TigerKingによる簡体字中国語\n@discord - TigerKing#1602</string>
+    <string name="creditTextRubi">Rubiによるアイスランド語の翻訳\n@discord - Rubi#8659\n@twitter - Rubiotter</string>
+    <string name="creditTextPridesnow">Pridesnowによるウクライナ語の翻訳\n@discord - pridesnow#1579\n@VK - https://vk.com/atimonder1 </string>
+    <string name="creditTextTyz">Tyzによるオランダ語の翻訳\n@discord - Tyz#2277\n@twitter - @TyzTweetz</string>
+    <string name="creditTextLoren">Lorenによる日本語と広東語の翻訳\n@discord - Loren#6074\n@twitter - @Lorenwashereuwu\nTumblr lorentheopossum</string>
+</resources>

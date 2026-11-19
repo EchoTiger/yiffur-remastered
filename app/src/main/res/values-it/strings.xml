@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Yiffur</string>
+    <string name="creditText">Sviluppatore e designer\n@twitter - EchoTiger\n@discord - EchoTiger#1447\n@furaffinity - bsmx93 // echotiger</string>
+    <string name="creditTextPhil">Traduzione tedesca di Phil\n@discord - Phil | Flipper#3621\n@e621 - Flipper\n@furaffinity - FlipperLP</string>
+    <string name="creditTextAljninja">Traduzione spagnola di Aljninja\n@discord - Aljninja#5731</string>
+    <string name="creditTextMaxwell">Traduzione polacca di Maxwell Longtail\n@discord - MultiDaxio#4432</string>
+    <string name="creditTextDoges">Traduzione portoghese di Doges\n@twitter - xDoges\n@discord - Doges#5183</string>
+    <string name="creditTextHandshake">Traduzione coreana di Handshake\n@discord Handshake#0001</string>
+    <string name="creditTextLetestroll">Traduction française par Letestroll\n@furaffinity - letestroll</string>
+    <string name="creditTextBribi">Traduzione italiana di Bribi\n@discord - bribi#5940</string>
+    <string name="creditTextAstroNoot">Traduzioni rumene di AstroNoot\n@twitter - AstroNoot88</string>
+    <string name="creditTextBurton">Traduzione in russo di MxBurton\n@discord - mxburton#3985</string>
+    <string name="creditTextLalkin">Traduzione in russo anche di !Xyрма\n@discord - lalkin#8671</string>
+    <string name="creditTextNaughtyVaporeon">Traduzione cinese di Naughty Vaporeon\n@discord - Naughty Vaporeon#6660\n@twitter - RainVaporeon</string>
+    <string name="creditTextMisterCake">Traduzione bulgara di MisterCake\n@twitter - Cake4Mister\n@e621 - MisterCake</string>
+    <string name="creditTextNightKey">Traduzione ungherese di NightKey\n@discord - Night Key#7326</string>
+    <string name="creditTextTigerKing">Cinese semplificato di TigerKing\n@discord - TigerKing#1602</string>
+    <string name="creditTextRubi">Traduzione islandese di Rubi\n@discord - Rubi#8659\n@twitter - Rubiotter</string>
+    <string name="creditTextPridesnow">Traduzione ucraina di Pridesnow\n@discord - pridesnow#1579\n@VK - https://vk.com/atimonder1 </string>
+    <string name="creditTextTyz">Traduzione olandese di Tyz\n@discord - Tyz#2277\n@twitter - @TyzTweetz</string>
+</resources>

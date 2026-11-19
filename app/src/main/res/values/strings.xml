@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Yiffur</string>
+    <string name="creditText">Developer and Designer\n@twitter - EchoTiger\n@discord - EchoTiger#1447\n@furaffinity - bsmx93 // echotiger</string>
+    <string name="creditTextPhil">German Translation by Phil\n@discord - Phil | Flipper#3621\n@e621 - Flipper\n@furaffinity - FlipperLP</string>
+    <string name="creditTextAljninja">Spanish Translation by Aljninja\n@discord - Aljninja#5731</string>
+    <string name="creditTextMaxwell">Polish translation by Maxwell Longtail\n@discord - MultiDaxio#4432</string>
+    <string name="creditTextDoges">Portuguese translation by Doges\n@twitter - xDoges\n@discord - Doges#5183</string>
+    <string name="creditTextHandshake">Korean translation by Handshake\n@discord - Handshake#0001</string>
+    <string name="creditTextLetestroll">French translation by Letestroll\n@furaffinity - letestroll</string>
+    <string name="creditTextBribi">Italian translation by Bribi\n@discord - bribi#5940</string>
+    <string name="creditTextAstroNoot">Romanian translation by AstroNoot\n@twitter - AstroNoot88</string>
+    <string name="creditTextBurton">Russian translation by MxBurton\n@discord - mxburton#3985</string>
+    <string name="creditTextLalkin">Russian translation also by !Xyрма\n@discord - lalkin#8671</string>
+    <string name="creditTextNaughtyVaporeon">Traditional Chinese by Naughty Vaporeon\n@discord - Naughty Vaporeon#6660\n@twitter - RainVaporeon</string>
+    <string name="creditTextMisterCake">Bulgarian translation by MisterCake\n@twitter - Cake4Mister\n@e621 - MisterCake</string>
+    <string name="creditTextNightKey">Hungarian translation by NightKey\n@discord - Night Key#7326</string>
+    <string name="creditTextTigerKing">Simplified Chinese by TigerKing\n@discord - TigerKing#1602</string>
+    <string name="creditTextRubi">Icelandic translation by Rubi\n@discord - Rubi#8659\n@twitter - Rubiotter</string>
+    <string name="creditTextPridesnow">Ukrainian translation by Pridesnow\n@discord - pridesnow#1579\n@VK - https://vk.com/atimonder1 </string>
+    <string name="creditTextTyz">Dutch translation by Tyz\n@discord - Tyz#2277\n@twitter - @TyzTweetz</string>
+    <string name="creditTextLoren">Japanese translation by Loren\n@discord - Loren#6074\n@twitter - @Lorenwashereuwu\nTumblr lorentheopossum</string>
+</resources>

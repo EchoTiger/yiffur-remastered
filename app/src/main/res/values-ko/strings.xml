@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Yiffur</string>
+    <string name="creditText">개발자 및 디자이너\n@트위터 - EchoTiger\n@디스코드 - EchoTiger#0001\n@furaffinity - bsmx93 // echotiger</string>
+    <string name="creditTextPhil">Phil의 독일어 번역\n@디스코드 - Phil | Flipper#3621\n@e621 - Flipper\n@furaffinity - FlipperLP</string>
+    <string name="creditTextAljninja">스페인어 번역 by Aljninja\n@인스타그램 - aljninja\n@디스코드 - Aljninja#5731</string>
+    <string name="creditTextMaxwell">Maxwell Longtail 의 폴란드어 번역\n@discord - MultiDaxio#4432</string>
+    <string name="creditTextDoges">에 의해 포르투갈어 번역 Doges\n@twitter - xDoges\n@디스코드 - Doges#5183</string>
+    <string name="creditTextHandshake">Handshake 한국어 번역\n@디스코드 - Handshake#0001</string>
+    <string name="creditTextLetestroll">Letestroll 의 프랑스어 번역\n@furaffinity - letestroll</string>
+    <string name="creditTextBribi">Bribi 의 이탈리아어 번역\n@디스코드 - bribi#5940</string>
+    <string name="creditTextAstroNoot">AstroNoot 의 루마니아어 번역\n@twitter - AstroNoot88</string>
+    <string name="creditTextBurton">MxBurton 의 러시아어 번역\n@디스코드 - mxburton#3985</string>
+    <string name="creditTextLalkin">!Xyрма 의 러시아어 번역\n@디스코드 - lalkin#8671</string>
+    <string name="creditTextNaughtyVaporeon">Naughty Vaporeon 의 중국어 번역\n@discord - Naughty Vaporeon#6660\n@twitter - RainVaporeon</string>
+    <string name="creditTextMisterCake">MisterCake에 의한 불가리아어 번역\n@twitter - Cake4Mister\n@e621 - MisterCake</string>
+    <string name="creditTextNightKey">NightKey에 의한 헝가리어 번역\n@discord - Night Key#7326</string>
+    <string name="creditTextTigerKing">TigerKing의 중국어 간체\n@discord - TigerKing#1602</string>
+    <string name="creditTextRubi">Rubi의 아이슬란드 어 번역\n@discord - Rubi#8659\n@twitter - Rubiotter</string>
+    <string name="creditTextPridesnow">Pridesnow의 우크라이나어 번역\n@discord - pridesnow#1579\n@VK - https://vk.com/atimonder1 </string>
+    <string name="creditTextTyz">Tyz의 네덜란드어 번역\n@discord - Tyz#2277\n@twitter - @TyzTweetz</string>
+</resources>

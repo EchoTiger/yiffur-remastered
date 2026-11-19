@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Yiffur</string>
+    <string name="creditText">Разработчик и дизайнер\n@twitter - EchoTiger\n@discord - EchoTiger#1447\n@furaffinity - bsmx93 // echotiger</string>
+    <string name="creditTextPhil">Немски превод от Phil\n@discord - Phil | Flipper#3621\n@e621 - Flipper\n@furaffinity - FlipperLP</string>
+    <string name="creditTextAljninja">Испански превод от Aljninja\n@discord - Aljninja#5731</string>
+    <string name="creditTextMaxwell">Полски превод от Maxwell Longtail\n@discord - MultiDaxio#4432</string>
+    <string name="creditTextDoges">Португалски превод от Doges\n@twitter - xDoges\n@discord - Doges#5183</string>
+    <string name="creditTextHandshake">Корейски превод от Handshake\n@discord - Handshake#0001</string>
+    <string name="creditTextLetestroll">Френски превод от Letestroll\n@furaffinity - letestroll</string>
+    <string name="creditTextBribi">Италиански превод от Bribi\n@discord - bribi#5940</string>
+    <string name="creditTextAstroNoot">Румънски превод от AstroNoot\n@twitter - AstroNoot88</string>
+    <string name="creditTextBurton">Руски превод от MxBurton\n@discord - mxburton#3985</string>
+    <string name="creditTextLalkin">Руски превод също от !Xyрма\n@discord - lalkin#8671</string>
+    <string name="creditTextNaughtyVaporeon">Китайски превод от Naughty Vaporeon\n@discord - Naughty Vaporeon#6660\n@twitter - RainVaporeon</string>
+    <string name="creditTextMisterCake">Български превод от MisterCake\n@twitter - Cake4Mister\n@e621 - MisterCake</string>
+    <string name="creditTextNightKey">Унгарски превод от NightKey\n@discord - Night Key#7326</string>
+    <string name="creditTextTigerKing">Опростен китайски от TigerKing\n@discord - TigerKing#1602</string>
+    <string name="creditTextRubi">Превод на исландски от Rubi\n@discord - Rubi#8659\n@twitter - Rubiotter</string>
+    <string name="creditTextPridesnow">Превод от украински от Pridesnow\n@discord - pridesnow#1579\n@VK - https://vk.com/atimonder1 </string>
+    <string name="creditTextTyz">Холандски превод от Tyz\n@discord - Tyz#2277\n@twitter - @TyzTweetz</string>
+</resources>

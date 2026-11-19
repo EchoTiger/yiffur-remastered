@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Yiffur</string>
+    <string name="creditText">開發者跟設計者\n@twitter - EchoTiger\n@discord - EchoTiger#1447\n@furaffinity - bsmx93 // echotiger</string>
+    <string name="creditTextPhil">德文翻譯 by Phil\n@discord - Phil | Flipper#3621\n@e621 - Flipper\n@furaffinity - FlipperLP</string>
+    <string name="creditTextAljninja">西班牙文翻譯 by Aljninja\n@discord - Aljninja#5731</string>
+    <string name="creditTextMaxwell">波蘭語翻譯 by Maxwell Longtail\n@discord - MultiDaxio#4432</string>
+    <string name="creditTextDoges">葡萄牙文翻譯 by Doges\n@twitter - xDoges\n@discord - Doges#5183</string>
+    <string name="creditTextHandshake">韓文翻譯 by Handshake\n@discord - Handshake#0001</string>
+    <string name="creditTextLetestroll">法文翻譯 by Letestroll\n@furaffinity - letestroll</string>
+    <string name="creditTextBribi">義大利文翻譯 by Bribi\n@discord - bribi#5940</string>
+    <string name="creditTextAstroNoot">羅馬文翻譯 by AstroNoot\n@twitter - AstroNoot88</string>
+    <string name="creditTextBurton">俄文翻譯 by MxBurton\n@discord - mxburton#3985</string>
+    <string name="creditTextLalkin">俄文翻譯(也) by !Xyрма\n@discord - lalkin#8671</string>
+    <string name="creditTextNaughtyVaporeon">繁體中文翻譯 by Naughty Vaporeon\n@discord - Naughty Vaporeon#6660\n@twitter - RainVaporeon</string>
+    <string name="creditTextMisterCake">保加利亞文 by MisterCake\n@twitter - Cake4Mister\n@e621 - MisterCake</string>
+    <string name="creditTextNightKey">匈牙利 by NightKey\n@discord - Night Key#7326</string>
+    <string name="creditTextTigerKing">簡體中文 by TigerKing\n@discord - TigerKing#1602</string>
+    <string name="creditTextRubi">冰島的 by Rubi\n@discord - Rubi#8659\n@twitter - Rubiotter</string>
+    <string name="creditTextPridesnow">烏克蘭 by Pridesnow\n@discord - pridesnow#1579\n@VK - https://vk.com/atimonder1 </string>
+    <string name="creditTextTyz">荷蘭語翻譯 by Tyz\n@discord - Tyz#2277\n@twitter - @TyzTweetz</string>
+</resources>
