@@ -46,6 +46,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Gif
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.ThumbDownOffAlt
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -109,6 +110,7 @@ fun PostFeedGrid(
     onShareLink: (Post) -> Unit,
     onOpenInBrowser: (Post) -> Unit,
     modifier: Modifier = Modifier,
+    onNotInterested: ((Post) -> Unit)? = null,
     budget: AdaptiveBudget = AdaptiveBudget.forTier(PerformanceTier.BALANCED, false),
     contentPadding: PaddingValues = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
     gridState: LazyGridState = rememberLazyGridState(),
@@ -342,6 +344,22 @@ fun PostFeedGrid(
                         quickActionPost = null
                     })
                 )
+                if (onNotInterested != null) {
+                    ListItem(
+                        headlineContent = { Text("Less like this (hide from For You)") },
+                        leadingContent = {
+                            Icon(
+                                Icons.Rounded.ThumbDownOffAlt,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        modifier = Modifier.combinedClickable(onClick = {
+                            onNotInterested(selected)
+                            quickActionPost = null
+                        })
+                    )
+                }
             }
         }
     }

@@ -116,4 +116,36 @@ class BlacklistEngineTest {
         // OR group
         assertTrue(BlacklistEngine.isBlacklisted(samplePost(general = listOf("bad_b")), rules))
     }
+
+    @Test
+    fun `compounds multiple rules with AND or OR operators and describes them clearly`() {
+        val andCompound = BlacklistEngine.compoundRules(
+            listOf("feral", "rating:e", "-comic", "feral"),
+            useOr = false
+        )
+        assertEquals("feral rating:e -comic", andCompound)
+        assertTrue(BlacklistEngine.isCompoundRule(andCompound))
+        assertTrue(BlacklistEngine.describeRule(andCompound).contains("ALL of"))
+        assertTrue(BlacklistEngine.describeRule(andCompound).contains("EXCEPT (comic)"))
+
+        val orCompound = BlacklistEngine.compoundRules(
+            listOf("vore", "inflation", "-rating:s"),
+            useOr = true
+        )
+        assertEquals("~vore ~inflation -rating:s", orCompound)
+        assertTrue(BlacklistEngine.describeRule(orCompound).contains("ANY of"))
+
+        // Verify compiled compounded OR rule with exception works accurately
+        val compiled = BlacklistEngine.compile(listOf(orCompound))
+        assertTrue(BlacklistEngine.isBlacklisted(samplePost(rating = Rating.EXPLICIT, general = listOf("vore")), compiled))
+        assertTrue(BlacklistEngine.isBlacklisted(samplePost(rating = Rating.QUESTIONABLE, general = listOf("inflation")), compiled))
+        assertFalse(BlacklistEngine.isBlacklisted(samplePost(rating = Rating.SAFE, general = listOf("vore")), compiled))
+    }
+
+    @Test
+    fun `supports dimension and tagcount metatags`() {
+        val rules = BlacklistEngine.compile(listOf("width:>1000", "tagcount:<2"))
+        assertFalse(BlacklistEngine.isBlacklisted(samplePost(general = listOf("wolf", "solo")), rules))
+        assertTrue(BlacklistEngine.isBlacklisted(samplePost(general = emptyList(), species = emptyList()), rules))
+    }
 }

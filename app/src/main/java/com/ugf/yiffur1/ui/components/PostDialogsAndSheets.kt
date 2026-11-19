@@ -70,6 +70,7 @@ fun TagBuilderSheet(
     blacklistedTagStrings: Set<String>,
     onSearchQuery: (String) -> Unit,
     onToggleBlacklistTag: (String) -> Unit,
+    onAddCompoundBlacklistRule: (String) -> Unit,
     onOpenWiki: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
     onDismiss: () -> Unit
@@ -106,7 +107,7 @@ fun TagBuilderSheet(
                     value = customQuery,
                     onValueChange = { customQuery = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Tap tags below to build query…") },
+                    placeholder = { Text("Tap + / - tags to search or compound blacklist…") },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp)
                 )
@@ -122,6 +123,26 @@ fun TagBuilderSheet(
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Rounded.Search, contentDescription = "Search", modifier = Modifier.size(18.dp))
+                }
+                OutlinedButton(
+                    onClick = {
+                        val q = customQuery.trim()
+                        if (q.isNotEmpty()) {
+                            onAddCompoundBlacklistRule(q)
+                            selectedMap.clear()
+                            customQuery = ""
+                        }
+                    },
+                    enabled = customQuery.isNotBlank(),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp)
+                ) {
+                    Icon(
+                        Icons.Rounded.Block,
+                        contentDescription = "Add as compound blacklist rule",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
 

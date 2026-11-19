@@ -111,6 +111,9 @@ interface BlacklistDao {
     @Query("DELETE FROM blacklist_rules WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    @Query("DELETE FROM blacklist_rules WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
     @Query("DELETE FROM blacklist_rules WHERE LOWER(TRIM(rule)) = LOWER(TRIM(:rule))")
     suspend fun deleteByRuleText(rule: String)
 
@@ -126,6 +129,9 @@ interface SearchHistoryDao {
     @Query("SELECT * FROM search_history ORDER BY lastUsedMs DESC LIMIT 25")
     fun observeRecent(): Flow<List<SearchHistoryEntity>>
 
+    @Query("SELECT * FROM search_history ORDER BY lastUsedMs DESC LIMIT :limit")
+    suspend fun getRecentSnapshot(limit: Int = 40): List<SearchHistoryEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: SearchHistoryEntity)
 
@@ -133,5 +139,43 @@ interface SearchHistoryDao {
     suspend fun delete(query: String)
 
     @Query("DELETE FROM search_history")
+    suspend fun clearAll()
+}
+
+@Dao
+interface SeenPostDao {
+    @Query("SELECT * FROM seen_posts ORDER BY seenAtMs DESC LIMIT 2500")
+    fun observeRecent(): Flow<List<SeenPostEntity>>
+
+    @Query("SELECT * FROM seen_posts ORDER BY seenAtMs DESC LIMIT :limit")
+    suspend fun getRecentSnapshot(limit: Int = 2500): List<SeenPostEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: SeenPostEntity)
+
+    @Query(
+        "DELETE FROM seen_posts WHERE postId NOT IN (SELECT postId FROM seen_posts ORDER BY seenAtMs DESC LIMIT :keepCount)"
+    )
+    suspend fun pruneOld(keepCount: Int = 2500)
+
+    @Query("DELETE FROM seen_posts")
+    suspend fun clearAll()
+}
+
+@Dao
+interface MutedTasteTagDao {
+    @Query("SELECT * FROM muted_taste_tags ORDER BY mutedAtMs DESC")
+    fun observeAll(): Flow<List<MutedTasteTagEntity>>
+
+    @Query("SELECT tag FROM muted_taste_tags")
+    suspend fun getAllTagsSnapshot(): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: MutedTasteTagEntity)
+
+    @Query("DELETE FROM muted_taste_tags WHERE tag = :tag")
+    suspend fun delete(tag: String)
+
+    @Query("DELETE FROM muted_taste_tags")
     suspend fun clearAll()
 }

@@ -47,3 +47,23 @@ data class SearchHistoryEntity(
     @PrimaryKey val query: String,
     val lastUsedMs: Long = System.currentTimeMillis()
 )
+
+/**
+ * Tracks posts the user has opened, engaged with, or dismissed ("Less like this") so the
+ * Explore "For You" discovery engine can balance fresh unseen content with familiar gems.
+ */
+@Entity(tableName = "seen_posts")
+data class SeenPostEntity(
+    @PrimaryKey val postId: Int,
+    val seenAtMs: Long = System.currentTimeMillis(),
+    val engagementScore: Int = 1 // 1 = viewed, 3 = liked/favorited, -5 = dismissed
+)
+
+/**
+ * Tags muted specifically from "For You" preference recommendations (without globally blacklisting them).
+ */
+@Entity(tableName = "muted_taste_tags")
+data class MutedTasteTagEntity(
+    @PrimaryKey val tag: String,
+    val mutedAtMs: Long = System.currentTimeMillis()
+)

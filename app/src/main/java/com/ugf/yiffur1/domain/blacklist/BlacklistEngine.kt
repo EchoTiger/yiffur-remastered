@@ -2,16 +2,30 @@ package com.ugf.yiffur1.domain.blacklist
 
 import com.ugf.yiffur1.domain.model.Post
 
+enum class CompoundOperator(val prefix: String, val chipLabel: String) {
+    AND("", "AND"),
+    NOT("-", "EXCEPT"),
+    OR("~", "ANY")
+}
+
+data class BlacklistTerm(
+    val operator: CompoundOperator,
+    val term: String
+) {
+    fun toTokenString(): String = "${operator.prefix}${term.trim()}"
+}
+
 /**
- * Full e621-compatible client-side blacklist evaluator.
+ * Full e621-compatible client-side blacklist evaluator & compound rule builder.
  *
  * Supports:
  * - Single tag lines: `gore`
- * - Multi-tag AND lines: `realistic_feral rating:e`
- * - Negated terms: `young -rating:s`
- * - OR terms: `~cat ~dog`
+ * - Compound multi-tag AND lines: `realistic_feral rating:e`
+ * - Compound negated terms: `young -rating:s`
+ * - Compound OR terms: `~cat ~dog rating:e`
  * - Metatags: `rating:s|q|e`, `type:mp4|webm|gif|png|jpg|swf`, `id:1234`, `user:name`,
- *   `score:<0`, `score:<=5`, `score:>10`, `favcount:<5`, `pool:123`, `status:pending|flagged|deleted`
+ *   `score:<0`, `score:<=5`, `score:>10`, `favcount:<5`, `pool:123`, `status:pending|flagged|deleted`,
+ *   `width:>4000`, `height:<500`, `duration:>60`, `tagcount:<10`
  * - Wildcard tags: `*_vore`, `feral*`
  * - Comment lines starting with `#` and blank lines (ignored)
  */
@@ -33,6 +47,86 @@ object BlacklistEngine {
             .filter { it.isNotEmpty() && !it.startsWith("#") }
             .distinct()
             .toList()
+    }
+
+    /**
+     * Parses a single blacklist rule line into structured [BlacklistTerm] tokens for visual compounding UI.
+     */
+    fun parseTerms(rawLine: String): List<BlacklistTerm> {
+        return rawLine.trim()
+            .split(Regex("\\s+"))
+            .filter { it.isNotBlank() }
+            .mapNotNull { token ->
+                val clean = token.trim()
+                when {
+                    clean.startsWith("-") && clean.length > 1 ->
+                        BlacklistTerm(CompoundOperator.NOT, clean.drop(1))
+                    clean.startsWith("~") && clean.length > 1 ->
+                        BlacklistTerm(CompoundOperator.OR, clean.drop(1))
+                    clean.isNotEmpty() && clean != "-" && clean != "~" ->
+                        BlacklistTerm(CompoundOperator.AND, clean)
+                    else -> null
+                }
+            }
+    }
+
+    fun formatTerms(terms: List<BlacklistTerm>): String {
+        return terms
+            .filter { it.term.isNotBlank() }
+            .distinctBy { "${it.operator.prefix}${it.term.trim().lowercase()}" }
+            .joinToString(" ") { it.toTokenString() }
+    }
+
+    fun isCompoundRule(rawLine: String): Boolean = parseTerms(rawLine).size >= 2
+
+    /**
+     * Compounds 2+ existing blacklist rules into a single deduplicated compound rule.
+     * - `useOr = false`: requires ALL terms (`tagA tagB -rating:s`)
+     * - `useOr = true`: converts plain AND terms into `~OR` terms (`~tagA ~tagB`) while keeping any `-NOT` exclusions intact
+     */
+    fun compoundRules(rules: List<String>, useOr: Boolean = false): String {
+        val merged = mutableListOf<BlacklistTerm>()
+        val seen = HashSet<String>()
+
+        for (line in rules) {
+            for (term in parseTerms(line)) {
+                val effectiveOp = if (useOr && term.operator == CompoundOperator.AND) {
+                    CompoundOperator.OR
+                } else {
+                    term.operator
+                }
+                val key = "${effectiveOp.prefix}${term.term.lowercase()}"
+                if (seen.add(key)) {
+                    merged += BlacklistTerm(effectiveOp, term.term)
+                }
+            }
+        }
+        return formatTerms(merged)
+    }
+
+    /**
+     * Returns a plain-English explanation of what a single or compound rule hides.
+     */
+    fun describeRule(rawLine: String): String {
+        val terms = parseTerms(rawLine)
+        if (terms.isEmpty()) return ""
+        val required = terms.filter { it.operator == CompoundOperator.AND }.map { it.term }
+        val excluded = terms.filter { it.operator == CompoundOperator.NOT }.map { it.term }
+        val anyOf = terms.filter { it.operator == CompoundOperator.OR }.map { it.term }
+
+        val clauses = mutableListOf<String>()
+        if (required.size == 1) {
+            clauses += "has ${required[0]}"
+        } else if (required.size > 1) {
+            clauses += "has ALL of (${required.joinToString(" + ")})"
+        }
+        if (anyOf.isNotEmpty()) {
+            clauses += "has ANY of (${anyOf.joinToString(" or ")})"
+        }
+        if (excluded.isNotEmpty()) {
+            clauses += "EXCEPT (${excluded.joinToString(", ")})"
+        }
+        return "Hides posts that " + clauses.joinToString(", ")
     }
 
     fun compile(rules: Collection<String>): List<CompiledRule> {
@@ -93,6 +187,11 @@ object BlacklistEngine {
         var isOr = false
 
         when {
+            term.startsWith("-~") || term.startsWith("~-") -> {
+                negated = true
+                isOr = true
+                term = term.drop(2)
+            }
             term.startsWith("-") -> {
                 negated = true
                 term = term.drop(1)
@@ -156,6 +255,10 @@ object BlacklistEngine {
             }
             "score" -> buildNumericPredicate(value) { it.scoreTotal }
             "favcount" -> buildNumericPredicate(value) { it.favCount }
+            "width" -> buildNumericPredicate(value) { it.width }
+            "height" -> buildNumericPredicate(value) { it.height }
+            "duration" -> buildNumericPredicate(value) { (it.duration ?: 0.0).toInt() }
+            "tagcount" -> buildNumericPredicate(value) { it.tags.allTagSet.size }
             "status" -> {
                 { post, _ ->
                     when (value) {

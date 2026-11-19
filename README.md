@@ -1,11 +1,15 @@
-# Yiffur Remastered (v2.1.0)
+# Yiffur Remastered (v2.2.0)
 
-A ground-up 2026 Kotlin + Jetpack Compose rewrite of **Yiffur**, the native Android client for [e926.net](https://e926.net) and [e621.net](https://e621.net) 
-Engineered for ultra-low CPU load, seamless background adaptation on constrained/older devices (Android 7.0+ / API 24+), and gold-standard media rendering on modern flagships.
+A ground-up 2026 Kotlin + Jetpack Compose rewrite of **Yiffur**, the native Android client for [e926.net](https://e926.net) and [e621.net](https://e621.net).
+Engineered for ultra-low CPU load, seamless background adaptation on constrained/older devices (Android 7.0+ / API 24+), personalized on-device discovery, visual tag blacklist compounding, and gold-standard media rendering on modern flagships.
 
 This is a ground-up remaster of the old Yiffur project from 2019.
 
 ## Highlights
+
+### Personalized "For You" Discovery Feed & Tag Blacklist Compounding (v2.2.0)
+- **Explore → "For You" Feed (`ForYouRecommendationEngine`)**: 100% on-device personalized discovery feed synthesized from your local/account favorites, saved searches, search history, and viewed-post signals (Room schema v2 with lossless `MIGRATION_1_2`). Switch between **Balanced Mix**, **Unseen Only**, and **Wildcards**, tap live taste chips to focus, tune/mute preference tags without globally blacklisting them, or long-press any post to mark **"Less like this"**.
+- **Visual Tag Blacklist Compounding**: Interactive Compound Rule Builder with `Require (AND)`, `Except (-)` & `Any (~OR)` operator toggles, quick metatags (`rating:e`, `-rating:s`, `type:webm`, `score:<0`, `width:`, `height:`, `duration:`, `tagcount:`), live plain-English explanations, inline rule editing, multi-select merging of existing rules into single compound rules, and 1-tap **"Blacklist Combo"** right inside the Post Viewer's Tag Builder.
 
 ### Adaptive Performance & Gold-Standard Media Engine (v2.1.0)
 - **Live Adaptive Performance Governor (`AdaptivePerformanceEngine`)**: Continuously monitors device RAM/CPU class, Android thermal status (`PowerManager`), memory trim signals (`onTrimMemory`), Android Battery Saver, metered cellular networks, and off-main-thread `Window.OnFrameMetricsAvailableListener` frame timings with anti-oscillation hysteresis. Automatically scales decode dimensions, bitmap format (`RGB_565` vs `ARGB_8888`), prefetch budget, offscreen pager pages, and video resolution (`Ultra` → `Balanced` → `Power Saver` → `Survival`) so scrolling and viewing stay fluid even on massive desktop artwork.
@@ -23,7 +27,7 @@ This is a ground-up remaster of the old Yiffur project from 2019.
 ### November 2026 e621 API v2 & Complete Feature Set
 - **November 2026 e621 API v2 Compliant**: `mode=extended` across posts/popular/favorites, all 9 tag categories, WebP previews/samples with JPG fallback, `files.video` multi-stream variants, HTTP Basic Auth strictly on `.json` API endpoints, 2 req/sec rate limiter + exponential backoff on `429`/`503`, and live `/users/me.json` sync.
 - **Browse, Explore, Viewer & Comic Reader**: Persistent multi-tab search sessions, live `/tags/autocomplete.json`, cursor (`b<id>`) & page-jump (1–750) pagination, Popular (Day/Week/Month + date stepping), Pools & vertical Comic Strip Reader, Post Sets, Random Post roulette, interactive e621 Notes, native DText renderer, Comments, Tag Builder, Wiki/Artist sheets, Privacy Shield curtain, and compound Blacklist engine.
-- **Seamless Legacy v1.x Migration**: Automatic one-time migration from `YiffurUserSettings` SharedPreferences on in-place upgrades (`versionCode = 20100`, strictly higher than both legacy `v1.001` code `2` and `v1.303` code `303`), plus JSON Backup Import supporting **both** Yiffur v2 backups and legacy Yiffur v1 exports.
+- **Seamless Legacy v1.x Migration**: Automatic one-time migration from `YiffurUserSettings` SharedPreferences on in-place upgrades (`versionCode = 20200`, strictly higher than both legacy `v1.001` code `2` and `v1.303` code `303`), plus JSON Backup Import supporting **both** Yiffur v2 backups and legacy Yiffur v1 exports.
 
 ## Build & Signing
 

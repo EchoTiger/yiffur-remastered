@@ -5,7 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ugf.yiffur1.data.api.ApiErrorParser
 import com.ugf.yiffur1.data.local.BlacklistRuleEntity
+import com.ugf.yiffur1.data.local.SeenPostEntity
 import com.ugf.yiffur1.di.AppContainer
+import com.ugf.yiffur1.domain.blacklist.BlacklistEngine
 import com.ugf.yiffur1.domain.model.ArtistInfo
 import com.ugf.yiffur1.domain.model.Comment
 import com.ugf.yiffur1.domain.model.Pool
@@ -178,6 +180,7 @@ class ViewerViewModel(
                         userVote = resp.ourScore
                     )
                     applyPostUpdate(updated)
+                    if (resp.ourScore > 0) markPostSeen(post.id, engagementScore = 3)
                 }
                 .onFailure { err -> _messages.tryEmit(ApiErrorParser.toUserMessage(err)) }
         }
@@ -189,6 +192,7 @@ class ViewerViewModel(
             container.favoritesRepository.toggleFavorite(post, currentlyFav)
                 .onSuccess { (isFav, favCount) ->
                     applyPostUpdate(post.copy(isFavorited = isFav, favCount = favCount))
+                    if (isFav) markPostSeen(post.id, engagementScore = 3)
                     _messages.tryEmit(if (isFav) "Added to favorites" else "Removed from favorites")
                 }
                 .onFailure { err -> _messages.tryEmit(ApiErrorParser.toUserMessage(err)) }
@@ -274,6 +278,39 @@ class ViewerViewModel(
             } else {
                 dao.insert(BlacklistRuleEntity(rule = clean))
                 _messages.tryEmit("Blacklisted \"$clean\"")
+            }
+        }
+    }
+
+    fun addCompoundBlacklistRule(rawRule: String) {
+        val normalized = BlacklistEngine.formatTerms(BlacklistEngine.parseTerms(rawRule))
+        if (normalized.isBlank()) return
+        viewModelScope.launch {
+            val dao = container.database.blacklistDao()
+            if (normalized.lowercase() in blacklistedTagStrings.value) {
+                _messages.tryEmit("Rule \"$normalized\" is already in blacklist")
+            } else {
+                dao.insert(BlacklistRuleEntity(rule = normalized))
+                val label = if (BlacklistEngine.isCompoundRule(normalized)) {
+                    "Added compound blacklist rule: $normalized"
+                } else {
+                    "Blacklisted \"$normalized\""
+                }
+                _messages.tryEmit(label)
+            }
+        }
+    }
+
+    fun markPostSeen(postId: Int, engagementScore: Int = 1) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                container.database.seenPostDao().upsert(
+                    SeenPostEntity(
+                        postId = postId,
+                        seenAtMs = System.currentTimeMillis(),
+                        engagementScore = engagementScore
+                    )
+                )
             }
         }
     }

@@ -226,6 +226,7 @@ fun PostViewerScreen(
 
                 LaunchedEffect(currentPost.id) {
                     isCurrentZoomed = false
+                    viewModel.markPostSeen(currentPost.id)
                     viewModel.loadNotesIfNeeded(currentPost)
                     viewModel.loadPostPoolsIfNeeded(currentPost)
                 }
@@ -924,6 +925,7 @@ fun PostViewerScreen(
                             onSearchTag(query)
                         },
                         onToggleBlacklistTag = viewModel::toggleBlacklistTag,
+                        onAddCompoundBlacklistRule = viewModel::addCompoundBlacklistRule,
                         onOpenWiki = viewModel::openWiki,
                         onOpenArtist = viewModel::openArtist,
                         onDismiss = { showTagBuilder = false }
