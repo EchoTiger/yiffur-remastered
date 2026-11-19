@@ -22,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Bookmarks
 import androidx.compose.material.icons.rounded.Casino
@@ -59,6 +60,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +81,7 @@ import com.ugf.yiffur1.ui.components.SearchSortFilterSheet
 import com.ugf.yiffur1.ui.theme.RatingExplicitColor
 import com.ugf.yiffur1.ui.theme.RatingSafeColor
 import com.ugf.yiffur1.util.Formatters
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,7 +95,9 @@ fun BrowseScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
 
     var showFilterSheet by remember { mutableStateOf(false) }
     var showQuickBrowseSheet by remember { mutableStateOf(false) }
@@ -264,6 +269,38 @@ fun BrowseScreen(
                         }
                     }
 
+                    if (perfState.isAutoThrottled) {
+                        Surface(
+                            onClick = {
+                                val reason = perfState.activeReason ?: "Optimizing for device load"
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Adaptive Engine: ${perfState.effectiveTier.label} ($reason)")
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Bolt,
+                                    contentDescription = "Adaptive performance active",
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = perfState.effectiveTier.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
                     val countText = state.totalCount?.let { count ->
                         val suffix = if (state.totalCountCapped) "+" else ""
                         "${Formatters.formatCompactCount(count)}$suffix results"
@@ -392,6 +429,7 @@ fun BrowseScreen(
                         PostFeedGrid(
                             posts = state.posts,
                             settings = state.settings,
+                            budget = perfState.budget,
                             localFavoriteIds = state.localFavoriteIds,
                             isLoadingMore = state.isLoadingMore,
                             hasMore = state.hasMore,

@@ -4,60 +4,79 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Gif
+import androidx.compose.material.icons.rounded.Hd
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import coil3.compose.SubcomposeAsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.size.Precision
 import com.ugf.yiffur1.domain.model.PostNote
-import kotlin.math.min
+import com.ugf.yiffur1.domain.perf.AdaptiveBudget
+import com.ugf.yiffur1.domain.perf.PerformanceTier
+import com.ugf.yiffur1.util.Formatters
+import me.saket.telephoto.zoomable.ZoomSpec
+import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
+import me.saket.telephoto.zoomable.rememberZoomableImageState
+import me.saket.telephoto.zoomable.rememberZoomableState
+import me.saket.telephoto.zoomable.zoomable
 import kotlin.math.roundToInt
 
 /**
- * Fullscreen zoomable image & animated GIF viewer with edge pass-through for HorizontalPager
- * and optional interactive e621 Note annotation boxes.
+ * Gold-standard fullscreen image & GIF viewer:
+ * - Static images use Telephoto `ZoomableAsyncImage` backed by Android `BitmapRegionDecoder`
+ *   tiled subsampling so multi-megapixel 4K–10K desktop artwork zooms smoothly with tiny RAM.
+ * - Smart Progressive Zoom Upgrade: starts on fast WebP sample, and automatically promotes to
+ *   tiled full-resolution original when the user zooms past 1.6x (when device budget permits).
+ * - Animated GIFs use dimension-capped Coil 3 decoding (`budget.maxGifDecodePx`) and switch to
+ *   tap-to-play poster protection in Survival mode so huge desktop GIFs never stall older phones.
+ * - Interactive e621 Notes track live pan & zoom pixel-accurately via `transformedContentBounds`.
  */
 @Composable
 fun ZoomablePostImage(
     imageUrl: String?,
+    originalUrl: String?,
     placeholderUrl: String?,
+    isGif: Boolean,
+    fileSizeBytes: Long,
     imageWidth: Int,
     imageHeight: Int,
     notes: List<PostNote>,
     showNotes: Boolean,
+    budget: AdaptiveBudget = AdaptiveBudget.forTier(PerformanceTier.BALANCED, false),
     onSingleTap: () -> Unit,
     onZoomStateChanged: (Boolean) -> Unit,
     onOpenUrl: (String) -> Unit,
@@ -67,168 +86,198 @@ fun ZoomablePostImage(
     onSearchTag: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var scale by remember(imageUrl) { mutableFloatStateOf(1f) }
-    var offset by remember(imageUrl) { mutableStateOf(Offset.Zero) }
-    var activeNote by remember(imageUrl) { mutableStateOf<PostNote?>(null) }
+    val context = LocalContext.current
+    val density = LocalDensity.current
 
-    LaunchedEffect(scale) {
-        onZoomStateChanged(scale > 1.02f)
+    var activeNote by remember(imageUrl, originalUrl) { mutableStateOf<PostNote?>(null) }
+    var promotedToOriginal by remember(imageUrl, originalUrl) { mutableStateOf(false) }
+    var gifUserStarted by remember(imageUrl) { mutableStateOf(false) }
+
+    val zoomableState = rememberZoomableState(
+        zoomSpec = ZoomSpec(maxZoomFactor = 5f)
+    )
+    val zoomableImageState = rememberZoomableImageState(zoomableState)
+
+    val zoomFraction = zoomableState.zoomFraction ?: 0f
+    LaunchedEffect(zoomFraction) {
+        onZoomStateChanged(zoomFraction > 0.02f)
+        if (!isGif &&
+            !promotedToOriginal &&
+            zoomFraction > 0.16f &&
+            budget.autoUpgradeZoomToOriginal &&
+            !originalUrl.isNullOrBlank() &&
+            originalUrl != imageUrl
+        ) {
+            promotedToOriginal = true
+        }
     }
 
-    BoxWithConstraints(
-        modifier = modifier
-            .fillMaxSize()
-            .pointerInput(imageUrl) {
-                detectTapGestures(
-                    onTap = {
-                        if (activeNote != null) {
-                            activeNote = null
-                        } else {
-                            onSingleTap()
-                        }
-                    },
-                    onDoubleTap = { tapOffset ->
-                        if (scale > 1.15f) {
-                            scale = 1f
-                            offset = Offset.Zero
-                        } else {
-                            val targetScale = 2.6f
-                            val centerX = size.width / 2f
-                            val centerY = size.height / 2f
-                            val maxX = (size.width * (targetScale - 1f)) / 2f
-                            val maxY = (size.height * (targetScale - 1f)) / 2f
-                            val dx = ((centerX - tapOffset.x) * (targetScale - 1f)).coerceIn(-maxX, maxX)
-                            val dy = ((centerY - tapOffset.y) * (targetScale - 1f)).coerceIn(-maxY, maxY)
-                            scale = targetScale
-                            offset = Offset(dx, dy)
-                        }
-                    }
-                )
-            }
-            .pointerInput(imageUrl) {
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    do {
-                        val event = awaitPointerEvent()
-                        val pointerCount = event.changes.count { it.pressed }
-                        val zoomChange = event.calculateZoom()
-                        val panChange = event.calculatePan()
+    val effectiveUrl = if (!isGif && promotedToOriginal && !originalUrl.isNullOrBlank()) {
+        originalUrl
+    } else {
+        imageUrl
+    }
 
-                        if (pointerCount >= 2 || scale > 1.02f) {
-                            val newScale = (scale * zoomChange).coerceIn(1f, 5f)
-                            val maxX = (size.width * (newScale - 1f)) / 2f
-                            val maxY = (size.height * (newScale - 1f)) / 2f
-                            val newOffset = if (newScale <= 1.02f) {
-                                Offset.Zero
-                            } else {
-                                Offset(
-                                    x = (offset.x + panChange.x).coerceIn(-maxX, maxX),
-                                    y = (offset.y + panChange.y).coerceIn(-maxY, maxY)
-                                )
-                            }
+    val handleTap: () -> Unit = {
+        if (activeNote != null) {
+            activeNote = null
+        } else {
+            onSingleTap()
+        }
+    }
 
-                            val atHorizontalEdge = newScale > 1.02f &&
-                                ((offset.x >= maxX - 1f && panChange.x > 0f) ||
-                                    (offset.x <= -maxX + 1f && panChange.x < 0f))
-
-                            scale = newScale
-                            offset = newOffset
-
-                            if (pointerCount >= 2 || (newScale > 1.02f && !atHorizontalEdge)) {
-                                event.changes.forEach { change ->
-                                    if (change.positionChanged()) change.consume()
-                                }
-                            }
-                        }
-                    } while (event.changes.any { it.pressed })
-                }
-            },
+    Box(
+        modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        val containerWidthPx = constraints.maxWidth.toFloat()
-        val containerHeightPx = constraints.maxHeight.toFloat()
-        val density = LocalDensity.current
+        if (isGif) {
+            val holdForTap = budget.tapToPlayAnimatedMedia && !gifUserStarted && !placeholderUrl.isNullOrBlank()
+            val gifModel = remember(effectiveUrl, placeholderUrl, holdForTap, budget.maxGifDecodePx) {
+                val target = if (holdForTap) placeholderUrl else effectiveUrl
+                ImageRequest.Builder(context)
+                    .data(target)
+                    .size(budget.maxGifDecodePx)
+                    .precision(Precision.INEXACT)
+                    .crossfade(false)
+                    .build()
+            }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offset.x
-                    translationY = offset.y
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            SubcomposeAsyncImage(
-                model = imageUrl,
+            AsyncImage(
+                model = gifModel,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-                loading = {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        if (!placeholderUrl.isNullOrBlank() && placeholderUrl != imageUrl) {
-                            AsyncImage(
-                                model = placeholderUrl,
-                                contentDescription = null,
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(36.dp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                },
-                error = {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zoomable(
+                        state = zoomableState,
+                        onClick = { handleTap() }
+                    )
+            )
+
+            if (holdForTap) {
+                Surface(
+                    onClick = { gifUserStarted = true },
+                    shape = RoundedCornerShape(24.dp),
+                    color = Color.Black.copy(alpha = 0.78f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Rounded.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Rounded.Gif, null, tint = Color.White)
                         Text(
-                            text = "Unable to load image",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "Tap to play GIF · ${Formatters.formatFileSize(fileSizeBytes)}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
+            }
+        } else {
+            // Static high-resolution image: Telephoto tiled subsampling + smooth placeholder
+            val request = remember(effectiveUrl, placeholderUrl, budget.enableCrossfade) {
+                ImageRequest.Builder(context)
+                    .data(effectiveUrl)
+                    .crossfade(budget.enableCrossfade)
+                    .build()
+            }
+
+            // Show cached lightweight preview immediately behind Telephoto while full tiles decode
+            if (!zoomableImageState.isImageDisplayed && !placeholderUrl.isNullOrBlank() && placeholderUrl != effectiveUrl) {
+                AsyncImage(
+                    model = placeholderUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            ZoomableAsyncImage(
+                model = request,
+                contentDescription = null,
+                state = zoomableImageState,
+                contentScale = ContentScale.Fit,
+                onClick = { handleTap() },
+                modifier = Modifier.fillMaxSize()
             )
 
-            // Interactive e621 Notes Overlay
-            if (showNotes && notes.isNotEmpty() && imageWidth > 0 && imageHeight > 0 && containerWidthPx > 0f && containerHeightPx > 0f) {
-                val fitScale = min(containerWidthPx / imageWidth.toFloat(), containerHeightPx / imageHeight.toFloat())
-                val renderedW = imageWidth * fitScale
-                val renderedH = imageHeight * fitScale
-                val leftMargin = (containerWidthPx - renderedW) / 2f
-                val topMargin = (containerHeightPx - renderedH) / 2f
+            if (!zoomableImageState.isImageDisplayed) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(34.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
 
-                Box(modifier = Modifier.fillMaxSize()) {
-                    notes.forEach { note ->
-                        val nx = leftMargin + note.x * fitScale
-                        val ny = topMargin + note.y * fitScale
-                        val nw = (note.width * fitScale).coerceAtLeast(18f)
-                        val nh = (note.height * fitScale).coerceAtLeast(18f)
-                        val isSelected = activeNote?.id == note.id
-
-                        Surface(
-                            modifier = Modifier
-                                .offset { IntOffset(nx.roundToInt(), ny.roundToInt()) }
-                                .size(
-                                    width = with(density) { nw.toDp() },
-                                    height = with(density) { nh.toDp() }
-                                )
-                                .clickable { activeNote = if (isSelected) null else note },
-                            color = Color(0xFFFFF59D).copy(alpha = if (isSelected) 0.50f else 0.28f),
-                            border = BorderStroke(
-                                width = if (isSelected) 2.dp else 1.dp,
-                                color = Color(0xFFFFD54F).copy(alpha = 0.9f)
-                            ),
-                            shape = RoundedCornerShape(3.dp)
-                        ) {}
+            // Subtle transient badge when smart-zoom upgraded to full-res tiled original
+            if (promotedToOriginal && !zoomableImageState.isImageDisplayed) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 86.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.Black.copy(alpha = 0.72f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Rounded.Hd,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = "Loading HD tiles…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White
+                        )
                     }
                 }
             }
         }
 
-        // Expanded active note card pinned cleanly near the top/center
+        // Interactive e621 Notes Overlay — tracks pan & zoom cleanly via Telephoto's transformedContentBounds
+        val bounds = zoomableState.transformedContentBounds
+        if (showNotes && notes.isNotEmpty() && imageWidth > 0 && imageHeight > 0 &&
+            bounds.width > 1f && bounds.height > 1f
+        ) {
+            val scaleX = bounds.width / imageWidth.toFloat()
+            val scaleY = bounds.height / imageHeight.toFloat()
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                notes.forEach { note ->
+                    val nx = bounds.left + note.x * scaleX
+                    val ny = bounds.top + note.y * scaleY
+                    val nw = (note.width * scaleX).coerceAtLeast(20f)
+                    val nh = (note.height * scaleY).coerceAtLeast(20f)
+                    val isSelected = activeNote?.id == note.id
+
+                    Surface(
+                        modifier = Modifier
+                            .offset { IntOffset(nx.roundToInt(), ny.roundToInt()) }
+                            .size(
+                                width = with(density) { nw.toDp() },
+                                height = with(density) { nh.toDp() }
+                            )
+                            .clickable { activeNote = if (isSelected) null else note },
+                        color = Color(0xFFFFF59D).copy(alpha = if (isSelected) 0.50f else 0.28f),
+                        border = BorderStroke(
+                            width = if (isSelected) 2.dp else 1.dp,
+                            color = Color(0xFFFFD54F).copy(alpha = 0.9f)
+                        ),
+                        shape = RoundedCornerShape(3.dp)
+                    ) {}
+                }
+            }
+        }
+
+        // Expanded active note card pinned cleanly above bottom chrome
         AnimatedVisibility(
             visible = showNotes && activeNote != null,
             modifier = Modifier

@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ugf.yiffur1.data.api.ApiErrorParser
 import com.ugf.yiffur1.data.local.StoredCredentials
+import com.ugf.yiffur1.data.update.UpdateCheckResult
 import com.ugf.yiffur1.di.AppContainer
 import com.ugf.yiffur1.domain.model.ApiHost
 import com.ugf.yiffur1.domain.model.AppSettings
@@ -13,12 +14,14 @@ import com.ugf.yiffur1.domain.model.FeedLayoutMode
 import com.ugf.yiffur1.domain.model.ThemeMode
 import com.ugf.yiffur1.domain.model.UserProfile
 import com.ugf.yiffur1.domain.model.VideoQualityPreference
+import com.ugf.yiffur1.domain.perf.PerformanceMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -44,6 +47,16 @@ class SettingsViewModel(
     private val _isVerifying = MutableStateFlow(false)
     private val _loginError = MutableStateFlow<String?>(null)
     private val _cacheSizeBytes = MutableStateFlow(0L)
+    private val _isCheckingUpdates = MutableStateFlow(false)
+    val isCheckingUpdates: StateFlow<Boolean> = _isCheckingUpdates.asStateFlow()
+
+    val performanceState = container.performanceEngine.state
+    val availableUpdate = container.appUpdateManager.availableUpdate
+    val updateDownloadState = container.appUpdateManager.downloadState
+    val lastUpdateCheckMs = container.appUpdateManager.lastCheckedMs
+    val fcmToken = container.pushNotificationManager.fcmToken
+    val isFirebaseConfigured: Boolean
+        get() = container.pushNotificationManager.isFirebaseConfigured
 
     private val _events = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val events = _events.asSharedFlow()
@@ -145,11 +158,36 @@ class SettingsViewModel(
     fun setGridColumns(cols: Int) = updateSettings { it.copy(gridColumns = cols.coerceIn(1, 5)) }
     fun setThemeMode(mode: ThemeMode) = updateSettings { it.copy(themeMode = mode) }
     fun setVideoQuality(pref: VideoQualityPreference) = updateSettings { it.copy(videoQuality = pref) }
+    fun setPerformanceMode(mode: PerformanceMode) = updateSettings { it.copy(performanceMode = mode) }
+
+    fun checkForUpdatesNow(onUpdateFound: () -> Unit) {
+        if (_isCheckingUpdates.value) return
+        viewModelScope.launch {
+            _isCheckingUpdates.value = true
+            when (val res = container.appUpdateManager.checkForUpdate(force = true, skippedTag = "")) {
+                is UpdateCheckResult.UpdateAvailable -> {
+                    _isCheckingUpdates.value = false
+                    onUpdateFound()
+                }
+                is UpdateCheckResult.UpToDate -> {
+                    _isCheckingUpdates.value = false
+                    _events.tryEmit("Yiffur is up to date!")
+                }
+                is UpdateCheckResult.Error -> {
+                    _isCheckingUpdates.value = false
+                    _events.tryEmit("Update check failed: ${res.message}")
+                }
+            }
+        }
+    }
 
     fun refreshCacheSize() {
         viewModelScope.launch {
             val size = withContext(Dispatchers.IO) {
-                dirSize(container.imageCacheDir) + dirSize(File(container.appContext.cacheDir, "shared"))
+                dirSize(container.imageCacheDir) +
+                    dirSize(container.videoCacheDir) +
+                    dirSize(File(container.appContext.cacheDir, "shared")) +
+                    dirSize(container.appUpdateManager.updatesCacheDir)
             }
             _cacheSizeBytes.value = size
         }
@@ -158,12 +196,10 @@ class SettingsViewModel(
     fun clearImageCache() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                container.imageLoader.memoryCache?.clear()
-                container.imageLoader.diskCache?.clear()
-                File(container.appContext.cacheDir, "shared").deleteRecursively()
+                container.clearAllMediaCaches()
             }
             refreshCacheSize()
-            _events.tryEmit("Image & media cache cleared")
+            _events.tryEmit("Image, video & update caches cleared")
         }
     }
 

@@ -15,6 +15,7 @@ import com.ugf.yiffur1.domain.model.PopularScale
 import com.ugf.yiffur1.domain.model.Post
 import com.ugf.yiffur1.domain.model.SearchOrder
 import com.ugf.yiffur1.domain.model.TagSuggestion
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -84,6 +86,8 @@ class BrowseViewModel(
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
 
+    val performanceState = container.performanceEngine.state
+
     private var autocompleteJob: Job? = null
     private var lastObservedHost: ApiHost? = null
 
@@ -142,7 +146,8 @@ class BrowseViewModel(
             localFavoriteIds = favIds,
             settings = settings
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BrowseUiState())
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BrowseUiState())
 
     private data class SearchDraft(
         val query: String,

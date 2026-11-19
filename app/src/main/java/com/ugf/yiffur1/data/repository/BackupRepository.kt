@@ -5,12 +5,23 @@ import com.ugf.yiffur1.data.local.LocalFavoriteEntity
 import com.ugf.yiffur1.data.local.SavedSearchEntity
 import com.ugf.yiffur1.data.local.SettingsRepository
 import com.ugf.yiffur1.data.local.YiffurDatabase
+import com.ugf.yiffur1.domain.model.ApiHost
 import com.ugf.yiffur1.domain.model.AppSettings
+import com.ugf.yiffur1.domain.model.FeedLayoutMode
 import com.ugf.yiffur1.domain.model.Post
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class YiffurBackupPayload(
@@ -38,6 +49,7 @@ data class BackupSavedSearch(
 
 /**
  * Local JSON Backup & Restore (replaces the obsolete 2020 external pastebin upload).
+ * Supports importing BOTH Yiffur v2 JSON backups AND legacy Yiffur v1 (`YiffurUserSettings`) exports!
  * Credentials/API keys are intentionally never exported for security.
  */
 class BackupRepository(
@@ -73,6 +85,13 @@ class BackupRepository(
     }
 
     suspend fun importFromJson(rawJson: String): Result<String> = runCatching {
+        val root = json.parseToJsonElement(rawJson).jsonObject
+
+        // Auto-detect legacy Yiffur v1 SharedPreferences export (flat map without `formatVersion`/`settings`)
+        if ("formatVersion" !in root && "settings" !in root && looksLikeLegacyV1Export(root)) {
+            return@runCatching importLegacyV1Export(root)
+        }
+
         val payload = json.decodeFromString<YiffurBackupPayload>(rawJson)
         settingsRepository.replaceAll(payload.settings)
 
@@ -105,5 +124,86 @@ class BackupRepository(
         }
 
         "Restored settings, ${payload.blacklistRules.size} blacklist rules, ${payload.savedSearches.size} saved searches, and ${payload.localFavorites.size} favorites."
+    }
+
+    private fun looksLikeLegacyV1Export(obj: JsonObject): Boolean {
+        val legacyKeys = setOf(
+            "ImageSources", "BlacklistList", "BrowseButtonsList", "FlowRowCount",
+            "HQChecked", "ShowSafeContent", "SyncFavsToE6", "DisableYiffurBlacklist"
+        )
+        return legacyKeys.any { it in obj }
+    }
+
+    private suspend fun importLegacyV1Export(obj: JsonObject): String {
+        fun bool(key: String, default: Boolean): Boolean =
+            (obj[key] as? JsonPrimitive)?.booleanOrNull ?: default
+
+        fun str(key: String, default: String): String =
+            (obj[key] as? JsonPrimitive)?.contentOrNull ?: default
+
+        fun intVal(key: String, default: Int): Int =
+            (obj[key] as? JsonPrimitive)?.intOrNull ?: default
+
+        settingsRepository.update { current ->
+            current.copy(
+                apiHost = ApiHost.fromDomain(str("ImageSources", current.apiHost.domain)),
+                hasAccepted18PlusUgc = bool("HasAcceptedUGC", current.hasAccepted18PlusUgc),
+                showSafe = bool("ShowSafeContent", current.showSafe),
+                showQuestionable = bool("ShowQuestionableContent", current.showQuestionable),
+                showExplicit = bool("ShowNSFWContent", current.showExplicit),
+                layoutMode = if (bool("LayoutMode", true)) FeedLayoutMode.STAGGERED_GRID else FeedLayoutMode.VERTICAL_LIST,
+                gridColumns = intVal("FlowRowCount", current.gridColumns).coerceIn(1, 5),
+                cropThumbnails = bool("CropThumbnails", current.cropThumbnails),
+                hdThumbnails = bool("HQChecked", current.hdThumbnails),
+                hdFullscreen = bool("HQFSChecked", current.hdFullscreen),
+                hdDownloads = bool("HQDownloadsChecked", current.hdDownloads),
+                showVotesOverlay = bool("VotesChecked", current.showVotesOverlay),
+                showRatingBadge = bool("ShowImageRating", current.showRatingBadge),
+                showVideoIndicator = bool("ShowVideoIndicator", current.showVideoIndicator),
+                showSearchTabs = bool("ShowSearchHistory", current.showSearchTabs),
+                showQuickBrowseButton = bool("ShowAutoSearchButtons", current.showQuickBrowseButton),
+                syncFavoritesToE621 = bool("SyncFavsToE6", current.syncFavoritesToE621),
+                disableLocalFavorites = bool("DisableYiffurFavorites", current.disableLocalFavorites),
+                disableBlacklist = bool("DisableYiffurBlacklist", current.disableBlacklist)
+            )
+        }
+
+        var importedRules = 0
+        val blElem = obj["BlacklistList"]
+        if (blElem is JsonArray) {
+            val existing = database.blacklistDao().getAllSnapshot().map { it.rule.lowercase() }.toSet()
+            val rules = blElem.mapNotNull { it.jsonPrimitive.contentOrNull?.trim() }
+                .filter { it.isNotEmpty() && it.lowercase() !in existing }
+                .map { BlacklistRuleEntity(rule = it) }
+            if (rules.isNotEmpty()) {
+                database.blacklistDao().insertAll(rules)
+                importedRules = rules.size
+            }
+        }
+
+        var importedShortcuts = 0
+        val buttonsRaw = (obj["BrowseButtonsList"] as? JsonPrimitive)?.contentOrNull
+        if (!buttonsRaw.isNullOrBlank()) {
+            runCatching {
+                val arr = json.parseToJsonElement(buttonsRaw).jsonArray
+                val existing = database.savedSearchDao().getAllSnapshot().map { "${it.title}|${it.query}" }.toSet()
+                val items = arr.mapIndexedNotNull { idx, elem ->
+                    val btn = elem.jsonObject
+                    val isPerm = btn["isPermanent"]?.jsonPrimitive?.booleanOrNull ?: false
+                    if (isPerm) return@mapIndexedNotNull null
+                    val title = btn["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                    val tags = btn["tags"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                    if (title.isNotEmpty() && tags.isNotEmpty() && "$title|$tags" !in existing) {
+                        SavedSearchEntity(title = title, query = tags, sortOrder = idx)
+                    } else null
+                }
+                if (items.isNotEmpty()) {
+                    database.savedSearchDao().insertAll(items)
+                    importedShortcuts = items.size
+                }
+            }
+        }
+
+        return "Imported legacy Yiffur v1 settings, $importedRules blacklist rules, and $importedShortcuts shortcuts!"
     }
 }

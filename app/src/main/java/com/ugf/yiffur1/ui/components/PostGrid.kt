@@ -1,5 +1,6 @@
 package com.ugf.yiffur1.ui.components
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,7 +38,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.BrokenImage
 import androidx.compose.material.icons.rounded.Collections
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
@@ -68,17 +67,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.SubcomposeAsyncImage
+import coil3.SingletonImageLoader
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.bitmapConfig
+import coil3.request.crossfade
+import coil3.size.Precision
 import com.ugf.yiffur1.domain.model.AppSettings
 import com.ugf.yiffur1.domain.model.FeedLayoutMode
 import com.ugf.yiffur1.domain.model.MediaType
 import com.ugf.yiffur1.domain.model.Post
+import com.ugf.yiffur1.domain.perf.AdaptiveBudget
+import com.ugf.yiffur1.domain.perf.PerformanceTier
 import com.ugf.yiffur1.ui.theme.FavoritePink
 import com.ugf.yiffur1.ui.theme.VoteDownRed
 import com.ugf.yiffur1.ui.theme.VoteUpGreen
@@ -101,6 +109,7 @@ fun PostFeedGrid(
     onShareLink: (Post) -> Unit,
     onOpenInBrowser: (Post) -> Unit,
     modifier: Modifier = Modifier,
+    budget: AdaptiveBudget = AdaptiveBudget.forTier(PerformanceTier.BALANCED, false),
     contentPadding: PaddingValues = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
     gridState: LazyGridState = rememberLazyGridState(),
     staggeredState: LazyStaggeredGridState = rememberLazyStaggeredGridState(),
@@ -108,8 +117,45 @@ fun PostFeedGrid(
 ) {
     var quickActionPost by remember { mutableStateOf<Post?>(null) }
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
 
     fun isFav(post: Post): Boolean = post.isFavorited || post.id in localFavoriteIds
+
+    // Scroll-idle viewport prefetcher: warms the next `budget.prefetchCount` tiles ONLY when the user stops scrolling
+    val prefetchAnchor by remember(settings.layoutMode, posts.size) {
+        derivedStateOf {
+            when (settings.layoutMode) {
+                FeedLayoutMode.STAGGERED_GRID ->
+                    (staggeredState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) to staggeredState.isScrollInProgress
+                FeedLayoutMode.UNIFORM_GRID ->
+                    (gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) to gridState.isScrollInProgress
+                FeedLayoutMode.VERTICAL_LIST ->
+                    (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) to listState.isScrollInProgress
+            }
+        }
+    }
+
+    LaunchedEffect(prefetchAnchor, budget.prefetchCount, budget.maxThumbnailPx, settings.hdThumbnails, settings.layoutMode) {
+        val (lastVisible, isScrolling) = prefetchAnchor
+        if (isScrolling || budget.prefetchCount <= 0 || lastVisible < 0 || posts.isEmpty()) return@LaunchedEffect
+
+        val loader = SingletonImageLoader.get(context)
+        val start = (lastVisible + 1).coerceAtMost(posts.size)
+        val end = (start + budget.prefetchCount).coerceAtMost(posts.size)
+        val isLarge = settings.layoutMode == FeedLayoutMode.VERTICAL_LIST
+        val cfg = if (budget.useRgb565Thumbnails) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
+
+        for (i in start until end) {
+            val url = posts[i].bestAdaptiveThumbnailUrl(settings.hdThumbnails, budget, isLarge) ?: continue
+            val req = ImageRequest.Builder(context)
+                .data(url)
+                .size(budget.maxThumbnailPx)
+                .precision(Precision.INEXACT)
+                .bitmapConfig(cfg)
+                .build()
+            loader.enqueue(req)
+        }
+    }
 
     when (settings.layoutMode) {
         FeedLayoutMode.STAGGERED_GRID -> {
@@ -131,10 +177,11 @@ fun PostFeedGrid(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalItemSpacing = 6.dp
             ) {
-                itemsIndexed(posts, key = { _, p -> p.id }) { index, post ->
+                itemsIndexed(posts, key = { _, p -> p.id }, contentType = { _, _ -> "post_card" }) { index, post ->
                     PostCard(
                         post = post,
                         settings = settings,
+                        budget = budget,
                         isFavorited = isFav(post),
                         useNaturalAspectRatio = true,
                         onClick = { onPostClick(index) },
@@ -145,7 +192,7 @@ fun PostFeedGrid(
                     )
                 }
                 if (isLoadingMore) {
-                    item(span = StaggeredGridItemSpan.FullLine) {
+                    item(span = StaggeredGridItemSpan.FullLine, contentType = "footer") {
                         LoadingMoreFooter()
                     }
                 }
@@ -171,10 +218,11 @@ fun PostFeedGrid(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                itemsIndexed(posts, key = { _, p -> p.id }) { index, post ->
+                itemsIndexed(posts, key = { _, p -> p.id }, contentType = { _, _ -> "post_card" }) { index, post ->
                     PostCard(
                         post = post,
                         settings = settings,
+                        budget = budget,
                         isFavorited = isFav(post),
                         useNaturalAspectRatio = false,
                         onClick = { onPostClick(index) },
@@ -185,7 +233,7 @@ fun PostFeedGrid(
                     )
                 }
                 if (isLoadingMore) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
+                    item(span = { GridItemSpan(maxLineSpan) }, contentType = "footer") {
                         LoadingMoreFooter()
                     }
                 }
@@ -209,10 +257,11 @@ fun PostFeedGrid(
                 contentPadding = contentPadding,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                itemsIndexed(posts, key = { _, p -> p.id }) { index, post ->
+                itemsIndexed(posts, key = { _, p -> p.id }, contentType = { _, _ -> "post_card_lg" }) { index, post ->
                     PostCard(
                         post = post,
                         settings = settings,
+                        budget = budget,
                         isFavorited = isFav(post),
                         useNaturalAspectRatio = true,
                         isLargeCard = true,
@@ -224,7 +273,7 @@ fun PostFeedGrid(
                     )
                 }
                 if (isLoadingMore) {
-                    item { LoadingMoreFooter() }
+                    item(contentType = "footer") { LoadingMoreFooter() }
                 }
             }
         }
@@ -303,6 +352,7 @@ fun PostFeedGrid(
 fun PostCard(
     post: Post,
     settings: AppSettings,
+    budget: AdaptiveBudget,
     isFavorited: Boolean,
     useNaturalAspectRatio: Boolean,
     onClick: () -> Unit,
@@ -310,9 +360,32 @@ fun PostCard(
     modifier: Modifier = Modifier,
     isLargeCard: Boolean = false
 ) {
+    val context = LocalContext.current
     val shape = RoundedCornerShape(12.dp)
-    val thumbUrl = post.bestThumbnailUrl(highQuality = settings.hdThumbnails || isLargeCard)
+    val thumbUrl = remember(post.id, settings.hdThumbnails, budget.tier, budget.preferSampleThumbnails, isLargeCard) {
+        post.bestAdaptiveThumbnailUrl(
+            hdSetting = settings.hdThumbnails,
+            budget = budget,
+            isLargeCard = isLargeCard
+        )
+    }
     val ratio = if (useNaturalAspectRatio) post.aspectRatio else 0.78f
+    val placeholderColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    val placeholderPainter = remember(placeholderColor) { ColorPainter(placeholderColor) }
+
+    val imageRequest = remember(thumbUrl, budget.maxThumbnailPx, budget.useRgb565Thumbnails, budget.enableCrossfade) {
+        ImageRequest.Builder(context)
+            .data(thumbUrl)
+            .size(budget.maxThumbnailPx)
+            .precision(Precision.INEXACT)
+            .bitmapConfig(if (budget.useRgb565Thumbnails) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888)
+            .crossfade(budget.enableCrossfade)
+            .build()
+    }
+
+    val scoreText = remember(post.scoreTotal) { Formatters.formatCompactCount(post.scoreTotal) }
+    val favText = remember(post.favCount) { Formatters.formatCompactCount(post.favCount) }
+    val durText = remember(post.duration) { Formatters.formatDuration(post.duration) }
 
     Surface(
         modifier = modifier
@@ -327,51 +400,18 @@ fun PostCard(
                 .fillMaxWidth()
                 .aspectRatio(ratio)
         ) {
-            SubcomposeAsyncImage(
-                model = thumbUrl,
+            // Zero-subcomposition AsyncImage: ~3x lower CPU layout cost per grid tile than SubcomposeAsyncImage
+            AsyncImage(
+                model = imageRequest,
                 contentDescription = "Post #${post.id}",
-                contentScale = if (settings.cropThumbnails && !useNaturalAspectRatio) {
+                placeholder = placeholderPainter,
+                error = placeholderPainter,
+                contentScale = if (settings.cropThumbnails || useNaturalAspectRatio) {
                     ContentScale.Crop
                 } else {
-                    ContentScale.Crop
+                    ContentScale.Fit
                 },
-                modifier = Modifier.fillMaxSize(),
-                loading = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                        )
-                    }
-                },
-                error = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Rounded.BrokenImage,
-                                contentDescription = "Failed to load",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = post.ext.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
+                modifier = Modifier.fillMaxSize()
             )
 
             // Top badges row: Rating + Pool/Children + Media type (Video/GIF/Sound)
@@ -431,10 +471,9 @@ fun PostCard(
                             tint = Color.White,
                             modifier = Modifier.size(13.dp)
                         )
-                        val dur = Formatters.formatDuration(post.duration)
-                        if (dur.isNotEmpty()) {
+                        if (durText.isNotEmpty()) {
                             Text(
-                                text = dur,
+                                text = durText,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White
                             )
@@ -483,7 +522,7 @@ fun PostCard(
                                     modifier = Modifier.size(12.dp)
                                 )
                                 Text(
-                                    text = Formatters.formatCompactCount(post.scoreTotal),
+                                    text = scoreText,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White,
                                     fontWeight = FontWeight.SemiBold
@@ -498,7 +537,7 @@ fun PostCard(
                                 )
                                 Spacer(Modifier.width(2.dp))
                                 Text(
-                                    text = Formatters.formatCompactCount(post.favCount),
+                                    text = favText,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White
                                 )

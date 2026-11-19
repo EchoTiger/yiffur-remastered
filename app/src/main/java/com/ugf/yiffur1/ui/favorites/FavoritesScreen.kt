@@ -63,6 +63,7 @@ fun FavoritesScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val focusManager = LocalFocusManager.current
 
@@ -249,6 +250,7 @@ fun FavoritesScreen(
                         PostFeedGrid(
                             posts = state.posts,
                             settings = state.settings,
+                            budget = perfState.budget,
                             localFavoriteIds = state.localFavoriteIds,
                             isLoadingMore = state.isLoadingMore,
                             hasMore = state.hasMoreRemote,

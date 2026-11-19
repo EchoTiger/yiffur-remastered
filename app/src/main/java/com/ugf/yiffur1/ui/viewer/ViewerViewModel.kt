@@ -80,6 +80,8 @@ class ViewerViewModel(
     val settings = container.settingsRepository.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.ugf.yiffur1.domain.model.AppSettings())
 
+    val performanceState = container.performanceEngine.state
+
     val localFavoriteIds = container.favoritesRepository.localFavoriteIdsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 

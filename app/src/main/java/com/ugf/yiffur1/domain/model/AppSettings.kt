@@ -1,5 +1,6 @@
 package com.ugf.yiffur1.domain.model
 
+import com.ugf.yiffur1.domain.perf.PerformanceMode
 import kotlinx.serialization.Serializable
 
 enum class ApiHost(val domain: String, val baseUrl: String, val isSafeOnly: Boolean) {
@@ -56,7 +57,13 @@ data class AppSettings(
     val disableBlacklist: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.YIFFUR_MIDNIGHT,
     val hideFromRecents: Boolean = false,
-    val postsPerPage: Int = 75
+    val postsPerPage: Int = 75,
+    val performanceMode: PerformanceMode = PerformanceMode.ADAPTIVE_AUTO,
+    val dataSaverOnMetered: Boolean = true,
+    val autoCheckUpdates: Boolean = true,
+    val pushAnnouncementsEnabled: Boolean = true,
+    val watchedTagAlertsEnabled: Boolean = false,
+    val skippedUpdateTag: String = ""
 ) {
     fun allowsRating(rating: Rating): Boolean {
         if (apiHost.isSafeOnly && rating != Rating.SAFE) return false

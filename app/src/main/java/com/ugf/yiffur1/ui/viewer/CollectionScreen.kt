@@ -1,6 +1,5 @@
 package com.ugf.yiffur1.ui.viewer
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,13 +37,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil3.compose.SubcomposeAsyncImage
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.size.Precision
 import com.ugf.yiffur1.domain.model.Post
+import com.ugf.yiffur1.domain.perf.PerformanceTier
 import com.ugf.yiffur1.ui.components.DTextView
 import com.ugf.yiffur1.ui.components.PostFeedGrid
 
@@ -67,7 +71,11 @@ fun CollectionScreen(
 ) {
     val state by viewModel.collectionState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
     val localFavIds by viewModel.localFavoriteIds.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val placeholderColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    val placeholderPainter = remember(placeholderColor) { ColorPainter(placeholderColor) }
 
     var comicStripMode by remember(state.title, state.isComicSeries) {
         mutableStateOf(state.isComicSeries)
@@ -175,29 +183,36 @@ fun CollectionScreen(
                             }
                         }
                         itemsIndexed(state.posts, key = { _, p -> p.id }) { idx, post ->
-                            val imageUrl = post.bestFullscreenImageUrl(highQuality = settings.hdFullscreen)
+                            val allowHd = settings.hdFullscreen && perfState.budget.allowImmediateHdFullscreen
+                            val imageUrl = post.bestFullscreenImageUrl(highQuality = allowHd)
+                            val maxDecodePx = when (perfState.effectiveTier) {
+                                PerformanceTier.ULTRA -> 1600
+                                PerformanceTier.BALANCED -> 1200
+                                PerformanceTier.POWER_SAVER -> 900
+                                PerformanceTier.SURVIVAL -> 720
+                            }
+                            val req = remember(imageUrl, maxDecodePx, perfState.budget.enableCrossfade) {
+                                ImageRequest.Builder(context)
+                                    .data(imageUrl)
+                                    .size(maxDecodePx)
+                                    .precision(Precision.INEXACT)
+                                    .crossfade(perfState.budget.enableCrossfade)
+                                    .build()
+                            }
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable { onOpenPostViewer(state.posts, idx) }
                             ) {
-                                SubcomposeAsyncImage(
-                                    model = imageUrl,
+                                AsyncImage(
+                                    model = req,
                                     contentDescription = "Page ${idx + 1}",
+                                    placeholder = placeholderPainter,
+                                    error = placeholderPainter,
                                     contentScale = ContentScale.FillWidth,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .aspectRatio(post.aspectRatio.coerceIn(0.35f, 2.5f)),
-                                    loading = {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                                        }
-                                    }
+                                        .aspectRatio(post.aspectRatio.coerceIn(0.35f, 2.5f))
                                 )
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
@@ -239,6 +254,7 @@ fun CollectionScreen(
                         PostFeedGrid(
                             posts = state.posts,
                             settings = settings,
+                            budget = perfState.budget,
                             localFavoriteIds = localFavIds,
                             isLoadingMore = false,
                             hasMore = false,

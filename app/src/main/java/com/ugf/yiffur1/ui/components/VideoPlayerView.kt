@@ -1,6 +1,7 @@
 package com.ugf.yiffur1.ui.components
 
 import androidx.annotation.OptIn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -47,7 +48,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -57,27 +60,34 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import coil3.compose.AsyncImage
 import com.ugf.yiffur1.domain.model.Post
 import com.ugf.yiffur1.domain.model.VideoQualityPreference
 import com.ugf.yiffur1.domain.model.VideoVariant
+import com.ugf.yiffur1.domain.perf.AdaptivePerformanceState
 import com.ugf.yiffur1.util.Formatters
 import kotlinx.coroutines.delay
-import okhttp3.OkHttpClient
 
 /**
- * Modern AndroidX Media3 ExoPlayer supporting both MP4 (H.264/AV1) & WebM with
- * 2026 e621 quality variant selector, mute, loop, playback speed, and smooth seeking.
+ * High-efficiency AndroidX Media3 ExoPlayer:
+ * - Streams through persistent LRU `SimpleCache` so looped & re-visited videos incur zero extra network CPU.
+ * - Hardware-codec-aware stream selection: automatically skips software-only AV1/VP9 on older/mid-range phones
+ *   and picks silicon-accelerated H.264/VP9/AV1 matched to live thermal/memory/jank budget.
+ * - Adaptive `DefaultLoadControl` buffer sizing saves RAM on constrained devices.
+ * - Survival mode defers ExoPlayer initialization until the user taps Play over the lightweight WebP poster.
  */
 @OptIn(UnstableApi::class)
 @Composable
 fun VideoPlayerView(
     post: Post,
-    mediaOkHttpClient: OkHttpClient,
+    videoDataSourceFactory: DataSource.Factory,
+    perfState: AdaptivePerformanceState,
     defaultQuality: VideoQualityPreference,
     defaultMuted: Boolean,
     isActivePage: Boolean,
@@ -85,6 +95,77 @@ fun VideoPlayerView(
     onToggleChrome: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val budget = perfState.budget
+    val hardware = perfState.hardware
+
+    var userTappedPlay by remember(post.id) { mutableStateOf(false) }
+
+    // In Survival mode, avoid allocating ExoPlayer / hardware codec instances until user taps Play
+    if (budget.tapToPlayAnimatedMedia && !userTappedPlay) {
+        val posterUrl = post.sampleUrl ?: post.previewUrl ?: post.previewFallbackUrl
+        val recommended = remember(post.id, defaultQuality, budget.recommendedVideoMaxHeight) {
+            post.selectOptimalVideoVariant(defaultQuality, hardware, budget)
+        }
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onToggleChrome
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!posterUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = posterUrl,
+                    contentDescription = "Video preview",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            Surface(
+                onClick = { userTappedPlay = true },
+                shape = RoundedCornerShape(26.dp),
+                color = Color.Black.copy(alpha = 0.80f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.85f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
+                    Column {
+                        Text(
+                            text = "Tap to Play Video",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        val infoLine = buildString {
+                            append(recommended?.key?.uppercase() ?: post.ext.uppercase())
+                            recommended?.let {
+                                append(" · ")
+                                append(it.codecBadge(hardware))
+                                if (it.size > 0L) {
+                                    append(" · ")
+                                    append(Formatters.formatFileSize(it.size))
+                                }
+                            }
+                        }
+                        Text(
+                            text = infoLine,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.72f)
+                        )
+                    }
+                }
+            }
+        }
+        return
+    }
+
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -100,9 +181,27 @@ fun VideoPlayerView(
         }
     }
 
+    var manuallyPinnedVariant by remember(post.id) { mutableStateOf(false) }
     var selectedVariant by remember(post.id, defaultQuality) {
-        mutableStateOf(post.bestVideoVariant(defaultQuality) ?: availableVariants.firstOrNull())
+        mutableStateOf(
+            post.selectOptimalVideoVariant(defaultQuality, hardware, budget)
+                ?: availableVariants.firstOrNull()
+        )
     }
+
+    // Automatically adapt downward if the device heats up / struggles while watching (unless user pinned manually)
+    LaunchedEffect(budget.recommendedVideoMaxHeight, budget.tier) {
+        if (!manuallyPinnedVariant) {
+            val recommended = post.selectOptimalVideoVariant(defaultQuality, hardware, budget)
+            val current = selectedVariant
+            if (recommended != null && current != null && recommended.url != current.url) {
+                if (recommended.effectiveHeight() < current.effectiveHeight()) {
+                    selectedVariant = recommended
+                }
+            }
+        }
+    }
+
     var isMuted by remember(post.id) { mutableStateOf(defaultMuted) }
     var isLooping by remember(post.id) { mutableStateOf(true) }
     var playbackSpeed by remember(post.id) { mutableFloatStateOf(1f) }
@@ -115,9 +214,19 @@ fun VideoPlayerView(
     var showSpeedMenu by remember { mutableStateOf(false) }
 
     val exoPlayer = remember(post.id) {
-        val dataSourceFactory = OkHttpDataSource.Factory(mediaOkHttpClient)
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                budget.exoPlayerMinBufferMs,
+                budget.exoPlayerMaxBufferMs,
+                budget.exoPlayerBufferForPlaybackMs,
+                budget.exoPlayerBufferForPlaybackMs * 2
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
         ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setLoadControl(loadControl)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(videoDataSourceFactory))
             .build()
             .apply {
                 repeatMode = Player.REPEAT_MODE_ONE
@@ -125,7 +234,7 @@ fun VideoPlayerView(
             }
     }
 
-    // Load or switch video variant seamlessly keeping current playback position
+    // Load or seamlessly switch stream variant while keeping current playback position
     LaunchedEffect(selectedVariant?.url) {
         val url = selectedVariant?.url ?: return@LaunchedEffect
         val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
@@ -151,7 +260,6 @@ fun VideoPlayerView(
         exoPlayer.playbackParameters = PlaybackParameters(playbackSpeed)
     }
 
-    // Observe player state & lifecycle pause/resume
     DisposableEffect(exoPlayer, lifecycleOwner) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -181,14 +289,14 @@ fun VideoPlayerView(
         }
     }
 
-    // Poll progress smoothly while active
-    LaunchedEffect(isActivePage, exoPlayer) {
-        while (isActivePage) {
+    // Poll progress ONLY when the controls HUD is actually visible so playback incurs zero idle recomposition!
+    LaunchedEffect(isActivePage, showControls, exoPlayer) {
+        while (isActivePage && showControls) {
             if (!isSeeking) {
                 positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
                 if (exoPlayer.duration > 0L) durationMs = exoPlayer.duration
             }
-            delay(200L)
+            delay(250L)
         }
     }
 
@@ -227,7 +335,6 @@ fun VideoPlayerView(
         }
 
         if (showControls) {
-            // Compact dark media bar above bottom action bar
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -338,11 +445,11 @@ fun VideoPlayerView(
                                 }
                             }
 
-                            if (availableVariants.size > 1) {
+                            if (availableVariants.isNotEmpty()) {
                                 Spacer(Modifier.size(6.dp))
                                 Box {
                                     Surface(
-                                        onClick = { showQualityMenu = true },
+                                        onClick = { if (availableVariants.size > 1) showQualityMenu = true },
                                         shape = RoundedCornerShape(8.dp),
                                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
                                     ) {
@@ -352,8 +459,11 @@ fun VideoPlayerView(
                                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
                                             Icon(Icons.Rounded.HighQuality, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                            val badge = selectedVariant?.let {
+                                                "${it.key.uppercase()} · ${it.codecBadge(hardware)}"
+                                            } ?: "AUTO"
                                             Text(
-                                                text = selectedVariant?.key?.uppercase() ?: "AUTO",
+                                                text = badge,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = Color.White
                                             )
@@ -362,11 +472,13 @@ fun VideoPlayerView(
                                     DropdownMenu(expanded = showQualityMenu, onDismissRequest = { showQualityMenu = false }) {
                                         availableVariants.forEach { variant ->
                                             val sizeStr = Formatters.formatFileSize(variant.size)
+                                            val codecTag = variant.codecBadge(hardware)
                                             DropdownMenuItem(
                                                 text = {
-                                                    Text("${variant.label} · $sizeStr")
+                                                    Text("${variant.label} · $codecTag · $sizeStr")
                                                 },
                                                 onClick = {
+                                                    manuallyPinnedVariant = true
                                                     selectedVariant = variant
                                                     showQualityMenu = false
                                                 }

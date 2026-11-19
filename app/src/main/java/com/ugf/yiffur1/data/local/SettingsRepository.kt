@@ -2,6 +2,7 @@ package com.ugf.yiffur1.data.local
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -13,6 +14,7 @@ import com.ugf.yiffur1.domain.model.AppSettings
 import com.ugf.yiffur1.domain.model.FeedLayoutMode
 import com.ugf.yiffur1.domain.model.ThemeMode
 import com.ugf.yiffur1.domain.model.VideoQualityPreference
+import com.ugf.yiffur1.domain.perf.PerformanceMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.util.concurrent.atomic.AtomicReference
@@ -28,70 +30,14 @@ class SettingsRepository(context: Context) {
         get() = cachedHost.get()
 
     val settingsFlow: Flow<AppSettings> = dataStore.data.map { prefs ->
-        val host = ApiHost.fromDomain(prefs[Keys.API_HOST])
-        cachedHost.set(host)
-        AppSettings(
-            apiHost = host,
-            hasAccepted18PlusUgc = prefs[Keys.ACCEPTED_UGC] ?: false,
-            showSafe = prefs[Keys.SHOW_SAFE] ?: true,
-            showQuestionable = prefs[Keys.SHOW_QUESTIONABLE] ?: true,
-            showExplicit = prefs[Keys.SHOW_EXPLICIT] ?: true,
-            layoutMode = prefs[Keys.LAYOUT_MODE]?.let { runCatching { FeedLayoutMode.valueOf(it) }.getOrNull() }
-                ?: FeedLayoutMode.STAGGERED_GRID,
-            gridColumns = (prefs[Keys.GRID_COLUMNS] ?: 3).coerceIn(1, 5),
-            cropThumbnails = prefs[Keys.CROP_THUMBNAILS] ?: true,
-            hdThumbnails = prefs[Keys.HD_THUMBNAILS] ?: true,
-            hdFullscreen = prefs[Keys.HD_FULLSCREEN] ?: false,
-            hdDownloads = prefs[Keys.HD_DOWNLOADS] ?: true,
-            videoQuality = prefs[Keys.VIDEO_QUALITY]?.let { runCatching { VideoQualityPreference.valueOf(it) }.getOrNull() }
-                ?: VideoQualityPreference.MP4_COMPATIBLE,
-            muteVideosByDefault = prefs[Keys.MUTE_VIDEOS] ?: false,
-            showVotesOverlay = prefs[Keys.SHOW_VOTES] ?: true,
-            showRatingBadge = prefs[Keys.SHOW_RATING_BADGE] ?: true,
-            showVideoIndicator = prefs[Keys.SHOW_VIDEO_INDICATOR] ?: true,
-            showSearchTabs = prefs[Keys.SHOW_SEARCH_TABS] ?: true,
-            showQuickBrowseButton = prefs[Keys.SHOW_QUICK_BROWSE] ?: true,
-            syncFavoritesToE621 = prefs[Keys.SYNC_FAVS_E621] ?: true,
-            disableLocalFavorites = prefs[Keys.DISABLE_LOCAL_FAVS] ?: false,
-            disableBlacklist = prefs[Keys.DISABLE_BLACKLIST] ?: false,
-            themeMode = prefs[Keys.THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
-                ?: ThemeMode.YIFFUR_MIDNIGHT,
-            hideFromRecents = prefs[Keys.HIDE_FROM_RECENTS] ?: false,
-            postsPerPage = (prefs[Keys.POSTS_PER_PAGE] ?: 75).coerceIn(20, 150)
-        )
+        val settings = readAll(prefs)
+        cachedHost.set(settings.apiHost)
+        settings
     }
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         dataStore.edit { prefs ->
-            val current = AppSettings(
-                apiHost = ApiHost.fromDomain(prefs[Keys.API_HOST]),
-                hasAccepted18PlusUgc = prefs[Keys.ACCEPTED_UGC] ?: false,
-                showSafe = prefs[Keys.SHOW_SAFE] ?: true,
-                showQuestionable = prefs[Keys.SHOW_QUESTIONABLE] ?: true,
-                showExplicit = prefs[Keys.SHOW_EXPLICIT] ?: true,
-                layoutMode = prefs[Keys.LAYOUT_MODE]?.let { runCatching { FeedLayoutMode.valueOf(it) }.getOrNull() }
-                    ?: FeedLayoutMode.STAGGERED_GRID,
-                gridColumns = (prefs[Keys.GRID_COLUMNS] ?: 3).coerceIn(1, 5),
-                cropThumbnails = prefs[Keys.CROP_THUMBNAILS] ?: true,
-                hdThumbnails = prefs[Keys.HD_THUMBNAILS] ?: true,
-                hdFullscreen = prefs[Keys.HD_FULLSCREEN] ?: false,
-                hdDownloads = prefs[Keys.HD_DOWNLOADS] ?: true,
-                videoQuality = prefs[Keys.VIDEO_QUALITY]?.let { runCatching { VideoQualityPreference.valueOf(it) }.getOrNull() }
-                    ?: VideoQualityPreference.MP4_COMPATIBLE,
-                muteVideosByDefault = prefs[Keys.MUTE_VIDEOS] ?: false,
-                showVotesOverlay = prefs[Keys.SHOW_VOTES] ?: true,
-                showRatingBadge = prefs[Keys.SHOW_RATING_BADGE] ?: true,
-                showVideoIndicator = prefs[Keys.SHOW_VIDEO_INDICATOR] ?: true,
-                showSearchTabs = prefs[Keys.SHOW_SEARCH_TABS] ?: true,
-                showQuickBrowseButton = prefs[Keys.SHOW_QUICK_BROWSE] ?: true,
-                syncFavoritesToE621 = prefs[Keys.SYNC_FAVS_E621] ?: true,
-                disableLocalFavorites = prefs[Keys.DISABLE_LOCAL_FAVS] ?: false,
-                disableBlacklist = prefs[Keys.DISABLE_BLACKLIST] ?: false,
-                themeMode = prefs[Keys.THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
-                    ?: ThemeMode.YIFFUR_MIDNIGHT,
-                hideFromRecents = prefs[Keys.HIDE_FROM_RECENTS] ?: false,
-                postsPerPage = (prefs[Keys.POSTS_PER_PAGE] ?: 75).coerceIn(20, 150)
-            )
+            val current = readAll(prefs)
             val updated = transform(current)
             cachedHost.set(updated.apiHost)
             writeAll(prefs, updated)
@@ -103,7 +49,44 @@ class SettingsRepository(context: Context) {
         dataStore.edit { prefs -> writeAll(prefs, settings) }
     }
 
-    private fun writeAll(prefs: androidx.datastore.preferences.core.MutablePreferences, s: AppSettings) {
+    private fun readAll(prefs: Preferences): AppSettings = AppSettings(
+        apiHost = ApiHost.fromDomain(prefs[Keys.API_HOST]),
+        hasAccepted18PlusUgc = prefs[Keys.ACCEPTED_UGC] ?: false,
+        showSafe = prefs[Keys.SHOW_SAFE] ?: true,
+        showQuestionable = prefs[Keys.SHOW_QUESTIONABLE] ?: true,
+        showExplicit = prefs[Keys.SHOW_EXPLICIT] ?: true,
+        layoutMode = prefs[Keys.LAYOUT_MODE]?.let { runCatching { FeedLayoutMode.valueOf(it) }.getOrNull() }
+            ?: FeedLayoutMode.STAGGERED_GRID,
+        gridColumns = (prefs[Keys.GRID_COLUMNS] ?: 3).coerceIn(1, 5),
+        cropThumbnails = prefs[Keys.CROP_THUMBNAILS] ?: true,
+        hdThumbnails = prefs[Keys.HD_THUMBNAILS] ?: true,
+        hdFullscreen = prefs[Keys.HD_FULLSCREEN] ?: false,
+        hdDownloads = prefs[Keys.HD_DOWNLOADS] ?: true,
+        videoQuality = prefs[Keys.VIDEO_QUALITY]?.let { runCatching { VideoQualityPreference.valueOf(it) }.getOrNull() }
+            ?: VideoQualityPreference.MP4_COMPATIBLE,
+        muteVideosByDefault = prefs[Keys.MUTE_VIDEOS] ?: false,
+        showVotesOverlay = prefs[Keys.SHOW_VOTES] ?: true,
+        showRatingBadge = prefs[Keys.SHOW_RATING_BADGE] ?: true,
+        showVideoIndicator = prefs[Keys.SHOW_VIDEO_INDICATOR] ?: true,
+        showSearchTabs = prefs[Keys.SHOW_SEARCH_TABS] ?: true,
+        showQuickBrowseButton = prefs[Keys.SHOW_QUICK_BROWSE] ?: true,
+        syncFavoritesToE621 = prefs[Keys.SYNC_FAVS_E621] ?: true,
+        disableLocalFavorites = prefs[Keys.DISABLE_LOCAL_FAVS] ?: false,
+        disableBlacklist = prefs[Keys.DISABLE_BLACKLIST] ?: false,
+        themeMode = prefs[Keys.THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
+            ?: ThemeMode.YIFFUR_MIDNIGHT,
+        hideFromRecents = prefs[Keys.HIDE_FROM_RECENTS] ?: false,
+        postsPerPage = (prefs[Keys.POSTS_PER_PAGE] ?: 75).coerceIn(20, 150),
+        performanceMode = prefs[Keys.PERFORMANCE_MODE]?.let { runCatching { PerformanceMode.valueOf(it) }.getOrNull() }
+            ?: PerformanceMode.ADAPTIVE_AUTO,
+        dataSaverOnMetered = prefs[Keys.DATA_SAVER_METERED] ?: true,
+        autoCheckUpdates = prefs[Keys.AUTO_CHECK_UPDATES] ?: true,
+        pushAnnouncementsEnabled = prefs[Keys.PUSH_ANNOUNCEMENTS] ?: true,
+        watchedTagAlertsEnabled = prefs[Keys.WATCHED_TAG_ALERTS] ?: false,
+        skippedUpdateTag = prefs[Keys.SKIPPED_UPDATE_TAG] ?: ""
+    )
+
+    private fun writeAll(prefs: MutablePreferences, s: AppSettings) {
         prefs[Keys.API_HOST] = s.apiHost.domain
         prefs[Keys.ACCEPTED_UGC] = s.hasAccepted18PlusUgc
         prefs[Keys.SHOW_SAFE] = s.showSafe
@@ -128,6 +111,12 @@ class SettingsRepository(context: Context) {
         prefs[Keys.THEME_MODE] = s.themeMode.name
         prefs[Keys.HIDE_FROM_RECENTS] = s.hideFromRecents
         prefs[Keys.POSTS_PER_PAGE] = s.postsPerPage.coerceIn(20, 150)
+        prefs[Keys.PERFORMANCE_MODE] = s.performanceMode.name
+        prefs[Keys.DATA_SAVER_METERED] = s.dataSaverOnMetered
+        prefs[Keys.AUTO_CHECK_UPDATES] = s.autoCheckUpdates
+        prefs[Keys.PUSH_ANNOUNCEMENTS] = s.pushAnnouncementsEnabled
+        prefs[Keys.WATCHED_TAG_ALERTS] = s.watchedTagAlertsEnabled
+        prefs[Keys.SKIPPED_UPDATE_TAG] = s.skippedUpdateTag
     }
 
     private object Keys {
@@ -155,5 +144,11 @@ class SettingsRepository(context: Context) {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val HIDE_FROM_RECENTS = booleanPreferencesKey("hide_from_recents")
         val POSTS_PER_PAGE = intPreferencesKey("posts_per_page")
+        val PERFORMANCE_MODE = stringPreferencesKey("performance_mode")
+        val DATA_SAVER_METERED = booleanPreferencesKey("data_saver_metered")
+        val AUTO_CHECK_UPDATES = booleanPreferencesKey("auto_check_updates")
+        val PUSH_ANNOUNCEMENTS = booleanPreferencesKey("push_announcements")
+        val WATCHED_TAG_ALERTS = booleanPreferencesKey("watched_tag_alerts")
+        val SKIPPED_UPDATE_TAG = stringPreferencesKey("skipped_update_tag")
     }
 }

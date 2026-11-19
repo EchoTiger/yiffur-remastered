@@ -118,14 +118,17 @@ import com.ugf.yiffur1.ui.theme.FavoritePink
 import com.ugf.yiffur1.ui.theme.VoteDownRed
 import com.ugf.yiffur1.ui.theme.VoteUpGreen
 import com.ugf.yiffur1.ui.theme.color
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import com.ugf.yiffur1.util.Formatters
-import okhttp3.OkHttpClient
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(UnstableApi::class)
+@kotlin.OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun PostViewerScreen(
     viewModel: ViewerViewModel,
-    mediaOkHttpClient: OkHttpClient,
+    videoDataSourceFactory: DataSource.Factory,
     onBack: () -> Unit,
     onSearchTag: (String) -> Unit,
     onOpenPool: (Int, Pool?) -> Unit,
@@ -137,6 +140,7 @@ fun PostViewerScreen(
 ) {
     val state by viewModel.viewerState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
     val localFavIds by viewModel.localFavoriteIds.collectAsStateWithLifecycle()
     val credentials by viewModel.credentials.collectAsStateWithLifecycle()
     val blacklistedTags by viewModel.blacklistedTagStrings.collectAsStateWithLifecycle()
@@ -149,7 +153,9 @@ fun PostViewerScreen(
     var privacyCurtainOn by remember { mutableStateOf(false) }
     var isCurrentZoomed by remember { mutableStateOf(false) }
     var showNotes by remember { mutableStateOf(true) }
-    var forceFullRes by remember(settings.hdFullscreen) { mutableStateOf(settings.hdFullscreen) }
+    var forceFullRes by remember(settings.hdFullscreen, perfState.budget.allowImmediateHdFullscreen) {
+        mutableStateOf(settings.hdFullscreen && perfState.budget.allowImmediateHdFullscreen)
+    }
 
     var showDetailsSheet by remember { mutableStateOf(false) }
     var showTagBuilder by remember { mutableStateOf(false) }
@@ -235,7 +241,7 @@ fun PostViewerScreen(
                     HorizontalPager(
                         state = pagerState,
                         userScrollEnabled = !isCurrentZoomed,
-                        beyondViewportPageCount = 1,
+                        beyondViewportPageCount = perfState.budget.pagerOffscreenPages,
                         modifier = Modifier.fillMaxSize()
                     ) { page ->
                         val post = state.posts[page]
@@ -245,7 +251,8 @@ fun PostViewerScreen(
                             MediaType.VIDEO -> {
                                 VideoPlayerView(
                                     post = post,
-                                    mediaOkHttpClient = mediaOkHttpClient,
+                                    videoDataSourceFactory = videoDataSourceFactory,
+                                    perfState = perfState,
                                     defaultQuality = settings.videoQuality,
                                     defaultMuted = settings.muteVideosByDefault,
                                     isActivePage = isActive && !privacyCurtainOn,
@@ -283,14 +290,22 @@ fun PostViewerScreen(
 
                             else -> {
                                 val targetUrl = post.bestFullscreenImageUrl(highQuality = forceFullRes)
-                                val placeholderUrl = post.bestThumbnailUrl(highQuality = true)
+                                val placeholderUrl = post.bestAdaptiveThumbnailUrl(
+                                    hdSetting = settings.hdThumbnails,
+                                    budget = perfState.budget,
+                                    isLargeCard = false
+                                )
                                 ZoomablePostImage(
                                     imageUrl = targetUrl,
+                                    originalUrl = post.originalUrl,
                                     placeholderUrl = placeholderUrl,
+                                    isGif = post.mediaType == MediaType.GIF,
+                                    fileSizeBytes = post.fileSize,
                                     imageWidth = post.width,
                                     imageHeight = post.height,
                                     notes = state.notesByPost[post.id].orEmpty(),
                                     showNotes = showNotes,
+                                    budget = perfState.budget,
                                     onSingleTap = { chromeVisible = !chromeVisible },
                                     onZoomStateChanged = { zoomed ->
                                         if (isActive) isCurrentZoomed = zoomed

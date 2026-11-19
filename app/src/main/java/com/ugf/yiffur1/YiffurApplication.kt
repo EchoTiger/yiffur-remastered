@@ -1,6 +1,7 @@
 package com.ugf.yiffur1
 
 import android.app.Application
+import android.content.ComponentCallbacks2
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -35,4 +36,24 @@ class YiffurApplication : Application(), SingletonImageLoader.Factory {
     }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader = container.imageLoader
+
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (!::container.isInitialized) return
+        container.performanceEngine.onMemoryTrim(level)
+
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
+            level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
+        ) {
+            runCatching { container.imageLoader.memoryCache?.clear() }
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        if (!::container.isInitialized) return
+        container.performanceEngine.onLowMemory()
+        runCatching { container.imageLoader.memoryCache?.clear() }
+    }
 }

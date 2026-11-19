@@ -1,6 +1,10 @@
 package com.ugf.yiffur1.domain.model
 
+import com.ugf.yiffur1.domain.perf.AdaptiveBudget
+import com.ugf.yiffur1.domain.perf.DeviceHardwareProfile
+import com.ugf.yiffur1.domain.perf.PerformanceTier
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 enum class Rating(val code: String, val label: String, val shortLabel: String) {
     SAFE("s", "Safe", "S"),
@@ -51,7 +55,45 @@ data class VideoVariant(
     val size: Long,
     val fps: Double?,
     val codec: String?
-)
+) {
+    /**
+     * Checks whether this video stream's codec has dedicated silicon decoding on [hardware].
+     * Prevents CPU pegging from software AV1/VP9 decoding on older or mid-range Android phones.
+     */
+    fun isHardwareAcceleratedOn(hardware: DeviceHardwareProfile): Boolean {
+        val c = codec?.lowercase().orEmpty()
+        val u = url.lowercase()
+        return when {
+            c.startsWith("av01") || c.startsWith("av1") -> hardware.hasHwAv1
+            c.startsWith("vp09") || c.startsWith("vp9") -> hardware.hasHwVp9
+            c.startsWith("avc") || c.startsWith("h264") -> hardware.hasHwH264
+            u.endsWith(".webm") -> hardware.hasHwVp9
+            u.endsWith(".mp4") -> hardware.hasHwH264
+            else -> hardware.hasHwH264
+        }
+    }
+
+    fun codecBadge(hardware: DeviceHardwareProfile): String {
+        val c = codec?.lowercase().orEmpty()
+        val u = url.lowercase()
+        val name = when {
+            c.startsWith("av01") || c.startsWith("av1") -> "AV1"
+            c.startsWith("vp09") || c.startsWith("vp9") -> "VP9"
+            c.startsWith("avc") || c.startsWith("h264") -> "H.264"
+            u.endsWith(".webm") -> "WebM"
+            u.endsWith(".mp4") -> "MP4"
+            else -> "Video"
+        }
+        return if (isHardwareAcceleratedOn(hardware)) "$name HW" else "$name SW"
+    }
+
+    fun effectiveHeight(): Int = when {
+        height > 0 -> height
+        key.equals("480p", ignoreCase = true) -> 480
+        key.equals("720p", ignoreCase = true) -> 720
+        else -> 1080
+    }
+}
 
 @Serializable
 data class PostTags(
@@ -65,11 +107,21 @@ data class PostTags(
     val lore: List<String> = emptyList(),
     val invalid: List<String> = emptyList()
 ) {
+    @Transient
+    private var cachedAllTags: List<String>? = null
+
+    @Transient
+    private var cachedTagSet: Set<String>? = null
+
     val allTags: List<String>
-        get() = artist + contributor + copyright + character + species + general + meta + lore + invalid
+        get() = cachedAllTags ?: (artist + contributor + copyright + character + species + general + meta + lore + invalid)
+            .also { cachedAllTags = it }
 
     val allTagSet: Set<String>
-        get() = buildSet {
+        get() = cachedTagSet ?: buildSet(
+            artist.size + contributor.size + copyright.size + character.size +
+                species.size + general.size + meta.size + lore.size + invalid.size
+        ) {
             artist.forEach { add(it.lowercase()) }
             contributor.forEach { add(it.lowercase()) }
             copyright.forEach { add(it.lowercase()) }
@@ -79,7 +131,7 @@ data class PostTags(
             meta.forEach { add(it.lowercase()) }
             lore.forEach { add(it.lowercase()) }
             invalid.forEach { add(it.lowercase()) }
-        }
+        }.also { cachedTagSet = it }
 
     fun byCategory(): List<Pair<TagCategory, List<String>>> = listOf(
         TagCategory.ARTIST to artist,
@@ -169,6 +221,28 @@ data class Post(
         }
     }
 
+    /**
+     * Dynamically picks the lightest crisp thumbnail URL allowed by the active [AdaptiveBudget].
+     * Prevents multi-megabyte sample/original downloads in dense grids or under thermal/RAM pressure.
+     */
+    fun bestAdaptiveThumbnailUrl(
+        hdSetting: Boolean,
+        budget: AdaptiveBudget,
+        isLargeCard: Boolean
+    ): String? {
+        val allowSample = when (budget.tier) {
+            PerformanceTier.ULTRA -> hdSetting || isLargeCard
+            PerformanceTier.BALANCED -> isLargeCard || (hdSetting && budget.preferSampleThumbnails)
+            PerformanceTier.POWER_SAVER -> isLargeCard
+            PerformanceTier.SURVIVAL -> false
+        }
+        return if (allowSample && hasSample && !sampleUrl.isNullOrBlank()) {
+            sampleUrl
+        } else {
+            previewUrl ?: previewFallbackUrl ?: sampleUrl ?: originalUrl
+        }
+    }
+
     fun bestFullscreenImageUrl(highQuality: Boolean): String? {
         if (mediaType == MediaType.GIF) {
             return originalUrl ?: sampleUrl ?: previewUrl
@@ -189,6 +263,59 @@ data class Post(
         } else {
             sampleFallbackUrl ?: sampleUrl ?: originalUrl
         }
+    }
+
+    /**
+     * Hardware-codec-aware, adaptive-budget-aware video stream selector.
+     * - Strongly prefers hardware-accelerated streams (never falls into software AV1 when HW H.264 exists).
+     * - Steps resolution down smoothly (Original/1080p -> 720p -> 480p) under thermal, RAM, jank, or metered constraints.
+     */
+    fun selectOptimalVideoVariant(
+        preference: VideoQualityPreference,
+        hardware: DeviceHardwareProfile,
+        budget: AdaptiveBudget
+    ): VideoVariant? {
+        val candidates = if (videoVariants.isNotEmpty()) {
+            videoVariants
+        } else {
+            listOfNotNull(
+                originalUrl?.let {
+                    VideoVariant("original", "Original", it, width, height, fileSize, null, null)
+                }
+            )
+        }
+        if (candidates.isEmpty()) return null
+
+        val hwCandidates = candidates.filter { it.isHardwareAcceleratedOn(hardware) }.ifEmpty { candidates }
+
+        val preferenceCap = when (preference) {
+            VideoQualityPreference.LOW_480P -> 480
+            VideoQualityPreference.SD_720P -> 720
+            VideoQualityPreference.MP4_COMPATIBLE -> 2160
+            VideoQualityPreference.ORIGINAL -> Int.MAX_VALUE
+        }
+        val maxHeight = minOf(preferenceCap, budget.recommendedVideoMaxHeight)
+
+        // Filter candidates that fit inside our active resolution budget
+        val withinCap = hwCandidates.filter { it.effectiveHeight() <= maxHeight }
+        if (withinCap.isNotEmpty()) {
+            // If user explicitly asked for Original and our tier is Ultra, pick hardware-accelerated original first
+            if (preference == VideoQualityPreference.ORIGINAL && budget.tier == PerformanceTier.ULTRA) {
+                withinCap.firstOrNull { it.key == "original" }?.let { return it }
+            }
+            // Otherwise prefer highest resolution within budget; prefer MP4/H.264 on ties, then smaller size
+            return withinCap.sortedWith(
+                compareByDescending<VideoVariant> { it.effectiveHeight() }
+                    .thenByDescending { it.key == "mp4" || it.url.endsWith(".mp4", ignoreCase = true) }
+                    .thenBy { if (it.size > 0L) it.size else Long.MAX_VALUE }
+            ).first()
+        }
+
+        // Everything exceeded maxHeight (e.g. video only has a single 1080p stream): pick lightest HW variant
+        return hwCandidates.sortedWith(
+            compareBy<VideoVariant> { it.effectiveHeight() }
+                .thenBy { if (it.size > 0L) it.size else Long.MAX_VALUE }
+        ).first()
     }
 
     fun bestVideoVariant(preference: VideoQualityPreference): VideoVariant? {

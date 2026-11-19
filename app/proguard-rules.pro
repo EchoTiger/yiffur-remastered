@@ -16,6 +16,18 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 -keep,includedescriptorclasses class com.ugf.yiffur1.data.repository.**$$serializer { *; }
+-keep,includedescriptorclasses class com.ugf.yiffur1.data.update.**$$serializer { *; }
+-keepclassmembers class com.ugf.yiffur1.data.update.** {
+    *** Companion;
+}
+-keep,includedescriptorclasses class com.ugf.yiffur1.domain.model.**$$serializer { *; }
+-keep,includedescriptorclasses class com.ugf.yiffur1.domain.perf.**$$serializer { *; }
+
+# Keep Firebase Messaging service & WorkManager workers
+-keep class com.ugf.yiffur1.MyFirebase { *; }
+-keep class com.ugf.yiffur1.notifications.*Worker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
 
 # Retrofit & OkHttp
 -dontwarn retrofit2.**

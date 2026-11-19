@@ -1,33 +1,36 @@
-# Yiffur 2.0 (Remastered)
+# Yiffur Remastered (v2.1.0)
 
-A ground-up 2026 Kotlin + Jetpack Compose rewrite of **Yiffur**, the native Android client for [e926.net](https://e926.net) and [e621.net](https://e621.net).
+A ground-up 2026 Kotlin + Jetpack Compose rewrite of **Yiffur**, the native Android client for [e926.net](https://e926.net) and [e621.net](https://e621.net) — engineered for ultra-low CPU load, seamless background adaptation on constrained/older devices (Android 7.0+ / API 24+), and gold-standard media rendering on modern flagships.
 
 ## Highlights
 
-- **November 2026 e621 API v2 Compliant**
-  - Uses `mode=extended` on `/posts.json`, `/posts/{id}.json`, `/posts/random.json`, `/popular.json`, and `/favorites.json` with the modern `files` / `stats` / `has` / `relationships` / `pools` schema and all 9 tag categories (`artist`, `contributor`, `copyright`, `character`, `species`, `lore`, `meta`, `general`, `invalid`).
-  - Automatic WebP preview/sample selection with JPG fallback, plus full 2026 `files.video` multi-stream support (H.264 MP4 variant, 720p, 480p, WebM, AV1 original).
-  - HTTP Basic Auth via `Authorization` header on `.json` API endpoints only (never sent to static CDN requests) and mandatory descriptive `User-Agent`.
-  - Built-in 2 req/sec rate limiter with polite exponential backoff on HTTP `429` / `503`.
-  - Live account verification & profile/blacklist sync via `GET /users/me.json`.
-- **Modern Android Architecture**
-  - 100% Kotlin 2.0 + Jetpack Compose Material 3 (Edge-to-Edge, Predictive Back, Splash Screen API).
-  - Room database (persistent search tabs, local offline favorites, saved search shortcuts, compound blacklist rules, search history), DataStore Preferences, and Android Keystore AES-256-GCM encrypted credential storage.
-  - Automatic one-time migration from Yiffur 1.x (`YiffurUserSettings`).
-  - Coil 3 (images + animated GIF/WebP) & AndroidX Media3 ExoPlayer (MP4 & WebM playback with quality/speed/mute/loop controls).
-  - Scoped Storage `MediaStore` downloads (no legacy storage permission required on Android 10–15).
-- **Complete Feature Set**
-  - **Browse**: Live `/tags/autocomplete.json` search bar, persistent multi-tab search sessions, cursor (`b<id>`) & page-jump (1–750) pagination, Sort & Media Filter sheet, Saved Search shortcuts, Masonry Flow / Uniform Grid / Single Column layouts (1–5 columns), long-press quick action menu.
-  - **Explore**: Popular posts (Day / Week / Month + date navigation), Pools browser, Post Sets browser, Random Post roulette.
-  - **Fullscreen Media Viewer**: Pinch-to-zoom, double-tap zoom, animated GIFs, Media3 video player with quality switcher, interactive e621 image **Notes** overlay (`/notes.json`), immersive mode, **Privacy Shield** curtain, live post voting & favoriting, native DText renderer (`[spoiler]`, `[section]`, `[quote]`, `[code]`, `post #id`, `pool #id`, `[[wiki]]`), interactive Tag Builder, in-app Wiki & Artist profile sheets, full Comments view/post/edit/quote-reply/vote.
-  - **Comic & Collection Reader**: Dedicated Pool viewer in exact canonical `post_ids` order with vertical **Comic Strip Reader** + Grid mode, Reverse Order, and Parent/Children family viewer.
-  - **Blacklist Engine**: Full e621 compound rule syntax (`young -rating:s`, `score:<0`, `*_vore`, `type:webm`, `~or`) with 1-tap sync from your e621 account or e621 defaults.
-  - **Privacy & Backup**: `FLAG_SECURE` hide-in-recents toggle, media cache manager, and JSON backup/restore via Storage Access Framework (credentials excluded).
+### Adaptive Performance & Gold-Standard Media Engine (v2.1.0)
+- **Live Adaptive Performance Governor (`AdaptivePerformanceEngine`)**: Continuously monitors device RAM/CPU class, Android thermal status (`PowerManager`), memory trim signals (`onTrimMemory`), Android Battery Saver, metered cellular networks, and off-main-thread `Window.OnFrameMetricsAvailableListener` frame timings with anti-oscillation hysteresis. Automatically scales decode dimensions, bitmap format (`RGB_565` vs `ARGB_8888`), prefetch budget, offscreen pager pages, and video resolution (`Ultra` → `Balanced` → `Power Saver` → `Survival`) so scrolling and viewing stay fluid even on massive desktop artwork.
+- **Gold-Standard Tiled Subsampling (`me.saket.telephoto:zoomable-image-coil3`)**: Multi-megapixel 4K–10K desktop PNGs/JPGs decode through `BitmapRegionDecoder` tiles with tiny memory footprint, smart progressive zoom-to-original upgrade, and pixel-accurate panning e621 Notes overlay (`transformedContentBounds`).
+- **Hardware-Codec-Aware Media3 Video Engine**: Probes `MediaCodecList` for dedicated silicon decoders (`AV1`, `VP9`, `H.264`) so devices without hardware AV1 never peg CPU at 100% software-decoding e621 AV1 streams. Backed by a persistent Media3 LRU `SimpleCache` (zero redundant network/TLS work on looping videos) and adaptive `DefaultLoadControl` buffers.
+- **Zero-Subcomposition Feed Pipeline**: Coil 3.1.0 with bounded parallel decode threads, exact-dimension `RGB_565` grid thumbnails, scroll-idle viewport prefetching, Compose stability configuration, and off-main-thread `Dispatchers.Default` blacklist/feed filtering.
+- **Broad Hardware Compatibility**: Supports **Android 7.0 Nougat through Android 15 (`minSdk = 24`, `targetSdk = 35`)** via Core Library Desugaring and API-adaptive hardware bitmap / GIF decoder selection (`AnimatedImageDecoder` API 28+, `GifDecoder` API 24–27).
 
-## Build
+### Automatic In-App Updates & Dual-Engine Push Notifications
+- **Sovereign GitHub Releases Auto-Updater**: Checks `EchoTiger/yiffur-remastered` releases periodically via WorkManager (every 12h) and on startup, streams the matching APK with progress tracking & optional SHA-256 checksum verification, and launches Android's Package Installer via `FileProvider`.
+- **Dual-Engine Push Notifications**:
+  - **Firebase Cloud Messaging (`com.ugf.yiffur1.MyFirebase`)**: Preserves the exact legacy service class name for seamless upgrades from Yiffur v1.x. Supports topic subscriptions (`yiffur_announcements`, `yiffur_updates`) and rich deep-link payloads (`post_id`, `pool_id`, `query`, `type = "update"`). Safely auto-disables when `app/google-services.json` is not present.
+  - **Local Saved Search / Artist Alerts (`TagWatchWorker`)**: Sovereign WorkManager background checks (zero Google dependency) notifying when new posts appear for your saved tag shortcuts.
 
-Requires JDK 17 and Android SDK Platform 35 (`compileSdk = 35`, `minSdk = 26`).
+### November 2026 e621 API v2 & Complete Feature Set
+- **November 2026 e621 API v2 Compliant**: `mode=extended` across posts/popular/favorites, all 9 tag categories, WebP previews/samples with JPG fallback, `files.video` multi-stream variants, HTTP Basic Auth strictly on `.json` API endpoints, 2 req/sec rate limiter + exponential backoff on `429`/`503`, and live `/users/me.json` sync.
+- **Browse, Explore, Viewer & Comic Reader**: Persistent multi-tab search sessions, live `/tags/autocomplete.json`, cursor (`b<id>`) & page-jump (1–750) pagination, Popular (Day/Week/Month + date stepping), Pools & vertical Comic Strip Reader, Post Sets, Random Post roulette, interactive e621 Notes, native DText renderer, Comments, Tag Builder, Wiki/Artist sheets, Privacy Shield curtain, and compound Blacklist engine.
+- **Seamless Legacy v1.x Migration**: Automatic one-time migration from `YiffurUserSettings` SharedPreferences on in-place upgrades (`versionCode = 20100`, strictly higher than both legacy `v1.001` code `2` and `v1.303` code `303`), plus JSON Backup Import supporting **both** Yiffur v2 backups and legacy Yiffur v1 exports.
+
+## Build & Signing
+
+Requires JDK 17 and Android SDK Platform 35 (`compileSdk = 35`, `minSdk = 24`).
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
 ```
+
+### Optional Release Signing & Legacy Package ID (`com.ugf0.yiffur`)
+- Provide `YIFFUR_KEYSTORE_PATH`, `YIFFUR_KEYSTORE_PASSWORD`, `YIFFUR_KEY_ALIAS`, and `YIFFUR_KEY_PASSWORD` via environment variables or `local.properties` to build signed release APKs/AABs (`./gradlew assembleRelease` / `./gradlew bundleRelease`).
+- Place `app/google-services.json` locally to enable Firebase Cloud Messaging (`BuildConfig.FIREBASE_ENABLED = true`); builds without it succeed cleanly in local-only mode.
+- Pass `-Pyiffur.legacyPackage=true` to target the original 2020 package ID `com.ugf0.yiffur` (default is `com.ugf.yiffur1`).

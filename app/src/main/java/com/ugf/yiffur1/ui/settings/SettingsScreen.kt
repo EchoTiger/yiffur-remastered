@@ -1,5 +1,13 @@
 package com.ugf.yiffur1.ui.settings
 
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -27,14 +35,19 @@ import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CleaningServices
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,7 +88,11 @@ import com.ugf.yiffur1.domain.model.ApiHost
 import com.ugf.yiffur1.domain.model.FeedLayoutMode
 import com.ugf.yiffur1.domain.model.ThemeMode
 import com.ugf.yiffur1.domain.model.VideoQualityPreference
+import com.ugf.yiffur1.domain.perf.PerformanceMode
+import com.ugf.yiffur1.domain.perf.PerformanceTier
+import com.ugf.yiffur1.notifications.NotificationHelper
 import com.ugf.yiffur1.ui.theme.RatingExplicitColor
+import com.ugf.yiffur1.ui.theme.RatingQuestionableColor
 import com.ugf.yiffur1.ui.theme.RatingSafeColor
 import com.ugf.yiffur1.util.Formatters
 import kotlin.math.roundToInt
@@ -109,10 +126,16 @@ private val YiffurCredits = listOf(
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     onOpenBlacklist: () -> Unit,
+    onOpenUpdateDialog: () -> Unit,
     onOpenUrl: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
+    val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
+    val isCheckingUpdates by viewModel.isCheckingUpdates.collectAsStateWithLifecycle()
+    val fcmToken by viewModel.fcmToken.collectAsStateWithLifecycle()
+
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
@@ -120,6 +143,13 @@ fun SettingsScreen(
     var showUgcConfirmDialog by remember { mutableStateOf(false) }
     var showHdFullscreenWarning by remember { mutableStateOf(false) }
     var creditsExpanded by remember { mutableStateOf(false) }
+    var notifPermissionGranted by remember { mutableStateOf(NotificationHelper.hasNotificationPermission(context)) }
+
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        notifPermissionGranted = granted || NotificationHelper.hasNotificationPermission(context)
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
@@ -135,6 +165,7 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) {
         viewModel.refreshCacheSize()
+        notifPermissionGranted = NotificationHelper.hasNotificationPermission(context)
         viewModel.events.collect { snackbarHostState.showSnackbar(it) }
     }
 
@@ -165,7 +196,7 @@ fun SettingsScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Yiffur Remastered", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            "v${BuildConfig.VERSION_NAME} · e621 API v2 (Nov 2026)",
+                            "v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE}) · e621 API v2",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -256,7 +287,281 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. Source & Content Filtering
+            // 2. Adaptive Performance & Hardware Telemetry Card
+            item {
+                SettingsGroupCard(title = "Adaptive Performance & Hardware") {
+                    val tierColor = when (perfState.effectiveTier) {
+                        PerformanceTier.ULTRA -> RatingSafeColor
+                        PerformanceTier.BALANCED -> MaterialTheme.colorScheme.primary
+                        PerformanceTier.POWER_SAVER -> RatingQuestionableColor
+                        PerformanceTier.SURVIVAL -> RatingExplicitColor
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Bolt, null, tint = tierColor, modifier = Modifier.size(18.dp))
+                                    Text(
+                                        text = "Active Tier: ${perfState.effectiveTier.label}",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = tierColor
+                                    )
+                                }
+                                Text(
+                                    text = "${perfState.smoothnessPercent}% smooth",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            val hw = perfState.hardware
+                            val ramGb = String.format("%.1f", hw.totalRamMb / 1024.0)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Memory,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "$ramGb GB RAM · ${hw.cpuCores} cores · API ${hw.apiLevel} · HW: ${hw.supportedHwCodecSummary}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            val statusLine = buildString {
+                                append("Thermal: ${perfState.thermal.label} · RAM: ${perfState.memory.label}")
+                                if (perfState.isPowerSaveMode) append(" · Battery Saver")
+                                if (perfState.isMeteredNetwork) append(" · Metered")
+                            }
+                            Text(
+                                text = statusLine,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            perfState.activeReason?.let { reason ->
+                                Text(
+                                    text = "Live status: $reason",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "Performance Profile",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        PerformanceMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = state.settings.performanceMode == mode,
+                                onClick = { viewModel.setPerformanceMode(mode) },
+                                label = { Text(mode.label) }
+                            )
+                        }
+                    }
+                    Text(
+                        text = state.settings.performanceMode.subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    SettingsSwitchRow(
+                        title = "Data Saver on Metered Networks",
+                        subtitle = "Uses compact 256px WebP previews and caps auto-video to 720p on cellular/metered connections",
+                        checked = state.settings.dataSaverOnMetered,
+                        onCheckedChange = { v -> viewModel.updateSettings { it.copy(dataSaverOnMetered = v) } }
+                    )
+                }
+            }
+
+            // 3. Updates & Push Notifications Card
+            item {
+                SettingsGroupCard(title = "Updates & Push Notifications") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = availableUpdate?.let { "Update ready: ${it.tagName}" }
+                                    ?: "Installed: v${BuildConfig.VERSION_NAME}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (availableUpdate != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "GitHub Releases · ${context.packageName}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        if (availableUpdate != null) {
+                            Button(
+                                onClick = onOpenUpdateDialog,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Rounded.SystemUpdate, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Update")
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = { viewModel.checkForUpdatesNow(onUpdateFound = onOpenUpdateDialog) },
+                                enabled = !isCheckingUpdates,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                if (isCheckingUpdates) {
+                                    CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Checking…")
+                                } else {
+                                    Icon(Icons.Rounded.SystemUpdate, null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Check Now")
+                                }
+                            }
+                        }
+                    }
+
+                    if (!notifPermissionGranted) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Notifications Disabled",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Text(
+                                        text = "Allow notifications to receive update alerts, FCM pushes, and watched tag alerts.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        } else {
+                                            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                            }
+                                            runCatching { context.startActivity(intent) }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Rounded.NotificationsActive, null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Enable")
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    SettingsSwitchRow(
+                        title = "Automatic Update Checks",
+                        subtitle = "Checks GitHub Releases in the background every 12 hours and notifies when a new build drops",
+                        checked = state.settings.autoCheckUpdates,
+                        onCheckedChange = { v -> viewModel.updateSettings { it.copy(autoCheckUpdates = v) } }
+                    )
+                    SettingsSwitchRow(
+                        title = "Push Announcements (FCM)",
+                        subtitle = if (viewModel.isFirebaseConfigured) {
+                            "Connected to Firebase Cloud Messaging (yiffur_announcements & yiffur_updates)"
+                        } else {
+                            "Local-only build (Firebase config not bundled)"
+                        },
+                        checked = state.settings.pushAnnouncementsEnabled,
+                        onCheckedChange = { v -> viewModel.updateSettings { it.copy(pushAnnouncementsEnabled = v) } }
+                    )
+                    SettingsSwitchRow(
+                        title = "Saved Search / Artist Alerts",
+                        subtitle = "Checks up to 5 saved tag shortcuts every 6 hours and notifies when new artwork appears",
+                        checked = state.settings.watchedTagAlertsEnabled,
+                        onCheckedChange = { v ->
+                            if (v && !notifPermissionGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                            viewModel.updateSettings { it.copy(watchedTagAlertsEnabled = v) }
+                        }
+                    )
+
+                    if (!fcmToken.isNullOrBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    cm.setPrimaryClip(ClipData.newPlainText("Yiffur FCM Token", fcmToken))
+                                    Toast.makeText(context, "FCM push token copied", Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(top = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "FCM Device Token: ${fcmToken!!.take(18)}…",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Icon(
+                                Icons.Rounded.ContentCopy,
+                                contentDescription = "Copy FCM Token",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 4. Source & Content Filtering
             item {
                 SettingsGroupCard(title = "Image Source & Content Filtering") {
                     Text(
@@ -338,7 +643,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 3. Appearance & Feed Layout
+            // 5. Appearance & Feed Layout
             item {
                 SettingsGroupCard(title = "Appearance & Feed Layout") {
                     Text("Theme", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -415,18 +720,18 @@ fun SettingsScreen(
                 }
             }
 
-            // 4. Media Quality & Video Playback
+            // 6. Media Quality & Video Playback
             item {
                 SettingsGroupCard(title = "Media Quality & Playback") {
                     SettingsSwitchRow(
                         title = "HD Thumbnails",
-                        subtitle = "Uses 850px WebP samples instead of 256px previews",
+                        subtitle = "Uses 850px WebP samples on high-tier devices (auto-scales down under load)",
                         checked = state.settings.hdThumbnails,
                         onCheckedChange = { v -> viewModel.updateSettings { it.copy(hdThumbnails = v) } }
                     )
                     SettingsSwitchRow(
                         title = "Original Resolution in Fullscreen",
-                        subtitle = "Loads full original PNG/JPG immediately (higher data usage)",
+                        subtitle = "Loads tiled full-res original immediately (auto-upgrades on zoom when off)",
                         checked = state.settings.hdFullscreen,
                         onCheckedChange = { v ->
                             if (v && !state.settings.hdFullscreen) {
@@ -460,7 +765,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 5. Favorites Sync
+            // 7. Favorites Sync
             item {
                 SettingsGroupCard(title = "Favorites") {
                     SettingsSwitchRow(
@@ -478,7 +783,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 6. Privacy, Cache & Backup
+            // 8. Privacy, Cache & Backup
             item {
                 SettingsGroupCard(title = "Privacy, Cache & Backup") {
                     SettingsSwitchRow(
@@ -496,7 +801,7 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text("Media Disk Cache", style = MaterialTheme.typography.bodyMedium)
+                            Text("Media & Video Disk Cache", style = MaterialTheme.typography.bodyMedium)
                             Text(
                                 Formatters.formatFileSize(state.cacheSizeBytes),
                                 style = MaterialTheme.typography.bodySmall,
@@ -534,14 +839,14 @@ fun SettingsScreen(
                         }
                     }
                     Text(
-                        "Backups include settings, blacklist rules, saved searches, and ${state.localFavoritesCount} local favorites. API keys are never exported.",
+                        "Supports Yiffur v2 JSON backups AND legacy Yiffur v1 exports. Includes settings, blacklist rules, saved searches, and ${state.localFavoritesCount} local favorites. API keys are never exported.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            // 7. Community & Credits
+            // 9. Community & Credits
             item {
                 SettingsGroupCard(title = "Community & Credits") {
                     Surface(
@@ -721,7 +1026,7 @@ fun SettingsScreen(
             title = { Text("High Data Usage Notice") },
             text = {
                 Text(
-                    "Original full-resolution images can exceed 10–20 MB each. Recommended on Wi-Fi or unlimited plans. You can also toggle HD per-post in the fullscreen viewer."
+                    "Original full-resolution images can exceed 10–20 MB each. Recommended on Wi-Fi or unlimited plans. Even with this off, pinching to zoom automatically upgrades to sharp HD tiles!"
                 )
             },
             confirmButton = {
