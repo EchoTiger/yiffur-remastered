@@ -1,5 +1,8 @@
 package com.ugf.yiffur1.ui.favorites
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ugf.yiffur1.data.api.ApiErrorParser
@@ -14,6 +17,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -28,7 +32,6 @@ enum class FavoritesSource {
 
 data class FavoritesUiState(
     val source: FavoritesSource = FavoritesSource.LOCAL,
-    val filterQuery: String = "",
     val posts: List<Post> = emptyList(),
     val localCount: Int = 0,
     val isLoading: Boolean = false,
@@ -47,7 +50,6 @@ class FavoritesViewModel(
 
     private data class RemoteState(
         val source: FavoritesSource = FavoritesSource.LOCAL,
-        val filterQuery: String = "",
         val submittedRemoteQuery: String = "",
         val remotePosts: List<Post> = emptyList(),
         val remotePage: Int = 1,
@@ -57,28 +59,38 @@ class FavoritesViewModel(
         val error: String? = null
     )
 
+    /**
+     * Synchronous Compose Snapshot text state so typing in the Favorites search bar never
+     * experiences async StateFlow cursor displacement.
+     */
+    var filterQuery by mutableStateOf("")
+        private set
+
+    private val _localFilterQuery = MutableStateFlow("")
     private val state = MutableStateFlow(RemoteState())
     private val _events = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val events = _events.asSharedFlow()
 
-    val performanceState = container.performanceEngine.state
+    val performanceBudget = container.performanceEngine.budgetState
+
+    private var lastLoadedRemoteKey: String? = null
 
     private val compiledBlacklist = container.database.blacklistDao().observeEnabled()
         .map { rules -> BlacklistEngine.compile(rules.map { it.rule }) }
 
     val uiState: StateFlow<FavoritesUiState> = combine(
-        state,
+        combine(state, _localFilterQuery) { st, q -> st to q },
         container.favoritesRepository.localFavoritesFlow,
         container.settingsRepository.settingsFlow,
         compiledBlacklist,
         container.credentialStore.credentialsFlow
-    ) { st, localPosts, settings, blacklist, creds ->
+    ) { (st, query), localPosts, settings, blacklist, creds ->
         val effectiveSource = if (settings.disableLocalFavorites) FavoritesSource.REMOTE_E621 else st.source
         val localIds = localPosts.map { it.id }.toSet()
 
         val displayed = when (effectiveSource) {
             FavoritesSource.LOCAL -> {
-                val queryTokens = st.filterQuery
+                val queryTokens = query
                     .trim()
                     .lowercase()
                     .replace('_', ' ')
@@ -112,7 +124,6 @@ class FavoritesViewModel(
 
         FavoritesUiState(
             source = effectiveSource,
-            filterQuery = st.filterQuery,
             posts = displayed,
             localCount = localPosts.size,
             isLoading = effectiveSource == FavoritesSource.REMOTE_E621 && st.isLoading,
@@ -127,6 +138,51 @@ class FavoritesViewModel(
     }.flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FavoritesUiState())
 
+    init {
+        // Automatically switch to & load remote e621 favorites whenever "Disable Local Yiffur Favorites"
+        // is enabled (including on cold startup), when signing in, or when switching e926 <-> e621.
+        viewModelScope.launch {
+            combine(
+                container.settingsRepository.settingsFlow
+                    .map { it.disableLocalFavorites to it.apiHost }
+                    .distinctUntilChanged(),
+                container.credentialStore.credentialsFlow,
+                state.map { it.source }.distinctUntilChanged()
+            ) { (disableLocal, apiHost), creds, selectedSource ->
+                Triple(disableLocal to apiHost, creds, selectedSource)
+            }.collect { (flags, creds, selectedSource) ->
+                val (disableLocal, apiHost) = flags
+                if (disableLocal && state.value.source != FavoritesSource.REMOTE_E621) {
+                    state.update { it.copy(source = FavoritesSource.REMOTE_E621, error = null) }
+                }
+
+                if (creds == null) {
+                    lastLoadedRemoteKey = null
+                    if (state.value.remotePosts.isNotEmpty() || state.value.error != null) {
+                        state.update {
+                            it.copy(
+                                remotePosts = emptyList(),
+                                remotePage = 1,
+                                hasMore = true,
+                                error = null
+                            )
+                        }
+                    }
+                    return@collect
+                }
+
+                val effectiveSource = if (disableLocal) FavoritesSource.REMOTE_E621 else selectedSource
+                if (effectiveSource == FavoritesSource.REMOTE_E621) {
+                    val key = "${creds.username.lowercase()}@${apiHost.domain}"
+                    if (lastLoadedRemoteKey != key && !state.value.isLoading) {
+                        lastLoadedRemoteKey = key
+                        loadRemoteFavorites(reset = true)
+                    }
+                }
+            }
+        }
+    }
+
     fun selectSource(source: FavoritesSource) {
         state.update { it.copy(source = source, error = null) }
         if (source == FavoritesSource.REMOTE_E621 && container.credentialStore.isLoggedIn) {
@@ -137,12 +193,13 @@ class FavoritesViewModel(
     }
 
     fun onFilterQueryChange(query: String) {
-        state.update { it.copy(filterQuery = query) }
+        filterQuery = query
+        _localFilterQuery.value = query
     }
 
     fun submitRemoteFilter() {
         if (uiState.value.source != FavoritesSource.REMOTE_E621) return
-        state.update { it.copy(submittedRemoteQuery = it.filterQuery.trim()) }
+        state.update { it.copy(submittedRemoteQuery = filterQuery.trim()) }
         loadRemoteFavorites(reset = true)
     }
 

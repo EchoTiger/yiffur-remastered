@@ -85,11 +85,12 @@ class MainActivity : ComponentActivity() {
             val thread = HandlerThread("yiffur-frame-metrics", android.os.Process.THREAD_PRIORITY_BACKGROUND)
             thread.start()
             val handler = Handler(thread.looper)
+            // Cache refresh rate once so the per-frame callback never performs Binder/Display IPC
+            val cachedRefreshRate = currentRefreshRateHz()
 
             val listener = Window.OnFrameMetricsAvailableListener { _, metrics, _ ->
                 val totalDurationNs = metrics.getMetric(FrameMetrics.TOTAL_DURATION)
-                val refreshRate = currentRefreshRateHz()
-                container.performanceEngine.recordFrameDuration(totalDurationNs, refreshRate)
+                container.performanceEngine.recordFrameDuration(totalDurationNs, cachedRefreshRate)
             }
 
             window.addOnFrameMetricsAvailableListener(listener, handler)

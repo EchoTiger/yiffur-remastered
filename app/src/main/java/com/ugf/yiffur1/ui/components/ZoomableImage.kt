@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -41,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.size.Precision
@@ -76,6 +78,7 @@ fun ZoomablePostImage(
     imageHeight: Int,
     notes: List<PostNote>,
     showNotes: Boolean,
+    isActivePage: Boolean = true,
     budget: AdaptiveBudget = AdaptiveBudget.forTier(PerformanceTier.BALANCED, false),
     onSingleTap: () -> Unit,
     onZoomStateChanged: (Boolean) -> Unit,
@@ -88,6 +91,32 @@ fun ZoomablePostImage(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
+
+    // Keep offscreen pager neighbors ultra-lightweight: avoid mounting Telephoto BitmapRegionDecoder
+    // tile engines or running animated GIF decoders until the user actually lands on the page.
+    if (!isActivePage) {
+        val previewModel = remember(placeholderUrl, imageUrl, budget.maxThumbnailPx) {
+            val preview = placeholderUrl ?: imageUrl
+            ImageRequest.Builder(context)
+                .data(preview)
+                .size(budget.maxThumbnailPx.coerceAtLeast(512))
+                .precision(Precision.INEXACT)
+                .crossfade(false)
+                .build()
+        }
+        Box(
+            modifier = modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = previewModel,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        return
+    }
 
     var activeNote by remember(imageUrl, originalUrl) { mutableStateOf<PostNote?>(null) }
     var promotedToOriginal by remember(imageUrl, originalUrl) { mutableStateOf(false) }
@@ -138,6 +167,9 @@ fun ZoomablePostImage(
                     .data(target)
                     .size(budget.maxGifDecodePx)
                     .precision(Precision.INEXACT)
+                    // Keep animated GIF frames out of long-lived RAM cache (disk cache still active)
+                    // so multi-megabyte AnimatedImageDrawable buffers are freed immediately on swipe.
+                    .memoryCachePolicy(if (holdForTap) CachePolicy.ENABLED else CachePolicy.DISABLED)
                     .crossfade(false)
                     .build()
             }
@@ -277,12 +309,13 @@ fun ZoomablePostImage(
             }
         }
 
-        // Expanded active note card pinned cleanly above bottom chrome
+        // Expanded active note card pinned cleanly above bottom chrome (respecting 3-button & gesture nav bars)
         AnimatedVisibility(
             visible = showNotes && activeNote != null,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(horizontal = 16.dp, vertical = 88.dp)
+                .navigationBarsPadding()
+                .padding(start = 16.dp, end = 16.dp, bottom = 78.dp)
         ) {
             activeNote?.let { note ->
                 Surface(

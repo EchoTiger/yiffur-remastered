@@ -88,7 +88,9 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun ExploreScreen(
     viewModel: ExploreViewModel,
-    onOpenPosts: (List<Post>, Int) -> Unit,
+    scrollSyncTargets: Map<String, Int>,
+    onConsumeScrollSync: (String) -> Unit,
+    onOpenPosts: (List<Post>, Int, String) -> Unit,
     onOpenPool: (Pool) -> Unit,
     onOpenPostSet: (PostSet) -> Unit,
     onCopyLink: (Post) -> Unit,
@@ -97,12 +99,15 @@ fun ExploreScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
+    val perfBudget by viewModel.performanceBudget.collectAsStateWithLifecycle()
+    val poolQuery = viewModel.poolQuery
+    val setQuery = viewModel.setQuery
     val snackbarHostState = remember { SnackbarHostState() }
     val focusManager = LocalFocusManager.current
     var showTasteSheet by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        viewModel.ensureInitialized()
         viewModel.events.collect { snackbarHostState.showSnackbar(it) }
     }
 
@@ -115,7 +120,7 @@ fun ExploreScreen(
                 onClick = {
                     if (!state.isFetchingRandom) {
                         viewModel.fetchRandomPost { randomPost ->
-                            onOpenPosts(listOf(randomPost), 0)
+                            onOpenPosts(listOf(randomPost), 0, "explore:random")
                         }
                     }
                 },
@@ -350,21 +355,24 @@ fun ExploreScreen(
                             }
 
                             else -> {
+                                val feedKey = "explore:for_you"
                                 PostFeedGrid(
                                     posts = state.forYouPosts,
                                     settings = state.settings,
-                                    budget = perfState.budget,
+                                    budget = perfBudget.budget,
                                     localFavoriteIds = state.localFavoriteIds,
                                     isLoadingMore = state.isLoadingMoreForYou,
                                     hasMore = true,
                                     onLoadMore = viewModel::loadMoreForYou,
-                                    onPostClick = { idx -> onOpenPosts(state.forYouPosts, idx) },
+                                    onPostClick = { idx -> onOpenPosts(state.forYouPosts, idx, feedKey) },
                                     onQuickFavorite = viewModel::quickToggleFavorite,
                                     onDownload = viewModel::downloadPost,
                                     onCopyLink = onCopyLink,
                                     onShareLink = onShareLink,
                                     onOpenInBrowser = onOpenInBrowser,
                                     onNotInterested = viewModel::markNotInterested,
+                                    scrollToPostId = scrollSyncTargets[feedKey],
+                                    onScrollToPostConsumed = { onConsumeScrollSync(feedKey) },
                                     contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 92.dp)
                                 )
                             }
@@ -423,20 +431,23 @@ fun ExploreScreen(
                             }
                         }
                         else -> {
+                            val feedKey = "explore:popular"
                             PostFeedGrid(
                                 posts = state.popularPosts,
                                 settings = state.settings,
-                                budget = perfState.budget,
+                                budget = perfBudget.budget,
                                 localFavoriteIds = state.localFavoriteIds,
                                 isLoadingMore = false,
                                 hasMore = false,
                                 onLoadMore = {},
-                                onPostClick = { idx -> onOpenPosts(state.popularPosts, idx) },
+                                onPostClick = { idx -> onOpenPosts(state.popularPosts, idx, feedKey) },
                                 onQuickFavorite = viewModel::quickToggleFavorite,
                                 onDownload = viewModel::downloadPost,
                                 onCopyLink = onCopyLink,
                                 onShareLink = onShareLink,
                                 onOpenInBrowser = onOpenInBrowser,
+                                scrollToPostId = scrollSyncTargets[feedKey],
+                                onScrollToPostConsumed = { onConsumeScrollSync(feedKey) },
                                 contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 92.dp)
                             )
                         }
@@ -446,7 +457,7 @@ fun ExploreScreen(
                 ExploreSection.POOLS -> {
                     Column(modifier = Modifier.fillMaxSize()) {
                         OutlinedTextField(
-                            value = state.poolQuery,
+                            value = poolQuery,
                             onValueChange = viewModel::onPoolQueryChange,
                             placeholder = { Text("Search comics & pools…") },
                             leadingIcon = { Icon(Icons.Rounded.Search, null) },
@@ -582,7 +593,7 @@ fun ExploreScreen(
                 ExploreSection.SETS -> {
                     Column(modifier = Modifier.fillMaxSize()) {
                         OutlinedTextField(
-                            value = state.setQuery,
+                            value = setQuery,
                             onValueChange = viewModel::onSetQueryChange,
                             placeholder = { Text("Search community sets…") },
                             leadingIcon = { Icon(Icons.Rounded.Search, null) },

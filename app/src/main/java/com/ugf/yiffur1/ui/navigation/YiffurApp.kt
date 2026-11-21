@@ -39,10 +39,12 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.ugf.yiffur1.data.update.UpdateCheckResult
 import com.ugf.yiffur1.di.AppContainer
 import com.ugf.yiffur1.domain.model.AppSettings
@@ -71,9 +73,14 @@ private object Routes {
     const val EXPLORE = "explore"
     const val FAVORITES = "favorites"
     const val SETTINGS = "settings"
-    const val VIEWER = "viewer"
-    const val COLLECTION = "collection"
+    const val VIEWER_ARG = "sessionId"
+    const val VIEWER_PATTERN = "viewer/{$VIEWER_ARG}"
+    const val COLLECTION_ARG = "sessionId"
+    const val COLLECTION_PATTERN = "collection/{$COLLECTION_ARG}"
     const val BLACKLIST = "blacklist"
+
+    fun viewer(sessionId: Long): String = "viewer/$sessionId"
+    fun collection(sessionId: Long): String = "collection/$sessionId"
 }
 
 private data class BottomNavDest(
@@ -134,6 +141,8 @@ fun YiffurApp(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val showBottomBar = currentRoute in PrimaryDestinations.map { it.route }
+    val scrollSyncTargets by viewerVm.scrollSyncTargets.collectAsStateWithLifecycle()
+    val registeredCleanupEntries = remember { mutableSetOf<String>() }
 
     // Refresh "Install unknown apps" permission status whenever user returns from Android Settings
     DisposableEffect(lifecycleOwner) {
@@ -200,16 +209,29 @@ fun YiffurApp(
         }
     }
 
+    fun openViewerPosts(posts: List<Post>, idx: Int, sourceFeedKey: String? = null) {
+        val sessionId = viewerVm.openPostsSession(posts, idx, sourceFeedKey)
+        navController.navigate(Routes.viewer(sessionId))
+    }
+
+    fun openViewerPostId(postId: Int) {
+        val sessionId = viewerVm.openPostByIdSession(postId)
+        navController.navigate(Routes.viewer(sessionId))
+    }
+
+    fun openCollection(mode: CollectionMode) {
+        val sessionId = viewerVm.loadCollectionSession(mode)
+        navController.navigate(Routes.collection(sessionId))
+    }
+
     LaunchedEffect(pendingDeepLink) {
         when (pendingDeepLink) {
             is DeepLinkTarget.OpenPost -> {
-                viewerVm.openPostById(pendingDeepLink.postId)
-                navController.navigate(Routes.VIEWER) { launchSingleTop = true }
+                openViewerPostId(pendingDeepLink.postId)
                 onDeepLinkConsumed()
             }
             is DeepLinkTarget.OpenPool -> {
-                viewerVm.loadCollection(CollectionMode.PoolCollection(pendingDeepLink.poolId))
-                navController.navigate(Routes.COLLECTION) { launchSingleTop = true }
+                openCollection(CollectionMode.PoolCollection(pendingDeepLink.poolId))
                 onDeepLinkConsumed()
             }
             is DeepLinkTarget.OpenSearch -> {
@@ -267,9 +289,10 @@ fun YiffurApp(
                     composable(Routes.BROWSE) {
                         BrowseScreen(
                             viewModel = browseVm,
-                            onOpenPostViewer = { posts, idx ->
-                                viewerVm.openPosts(posts, idx)
-                                navController.navigate(Routes.VIEWER)
+                            scrollSyncTargets = scrollSyncTargets,
+                            onConsumeScrollSync = viewerVm::consumeScrollSyncTarget,
+                            onOpenPostViewer = { posts, idx, feedKey ->
+                                openViewerPosts(posts, idx, feedKey)
                             },
                             onOpenBlacklist = { navController.navigate(Routes.BLACKLIST) },
                             onCopyLink = ::copyPostLink,
@@ -283,17 +306,16 @@ fun YiffurApp(
                     composable(Routes.EXPLORE) {
                         ExploreScreen(
                             viewModel = exploreVm,
-                            onOpenPosts = { posts, idx ->
-                                viewerVm.openPosts(posts, idx)
-                                navController.navigate(Routes.VIEWER)
+                            scrollSyncTargets = scrollSyncTargets,
+                            onConsumeScrollSync = viewerVm::consumeScrollSyncTarget,
+                            onOpenPosts = { posts, idx, feedKey ->
+                                openViewerPosts(posts, idx, feedKey)
                             },
                             onOpenPool = { pool ->
-                                viewerVm.loadCollection(CollectionMode.PoolCollection(pool.id, pool))
-                                navController.navigate(Routes.COLLECTION)
+                                openCollection(CollectionMode.PoolCollection(pool.id, pool))
                             },
                             onOpenPostSet = { postSet ->
-                                viewerVm.loadCollection(CollectionMode.PostSetCollection(postSet))
-                                navController.navigate(Routes.COLLECTION)
+                                openCollection(CollectionMode.PostSetCollection(postSet))
                             },
                             onCopyLink = ::copyPostLink,
                             onShareLink = ::sharePostLink,
@@ -306,9 +328,10 @@ fun YiffurApp(
                     composable(Routes.FAVORITES) {
                         FavoritesScreen(
                             viewModel = favoritesVm,
-                            onOpenPostViewer = { posts, idx ->
-                                viewerVm.openPosts(posts, idx)
-                                navController.navigate(Routes.VIEWER)
+                            scrollSyncTargets = scrollSyncTargets,
+                            onConsumeScrollSync = viewerVm::consumeScrollSyncTarget,
+                            onOpenPostViewer = { posts, idx, feedKey ->
+                                openViewerPosts(posts, idx, feedKey)
                             },
                             onGoToSettingsLogin = { navigateToPrimary(Routes.SETTINGS) },
                             onCopyLink = ::copyPostLink,
@@ -331,36 +354,77 @@ fun YiffurApp(
                         )
                     }
 
-                    composable(Routes.VIEWER) {
+                    composable(
+                        route = Routes.VIEWER_PATTERN,
+                        arguments = listOf(navArgument(Routes.VIEWER_ARG) { type = NavType.LongType })
+                    ) { backStackEntry ->
+                        val sessionId = backStackEntry.arguments?.getLong(Routes.VIEWER_ARG) ?: -1L
+                        LaunchedEffect(backStackEntry.id) {
+                            if (registeredCleanupEntries.add(backStackEntry.id)) {
+                                val observer = object : LifecycleEventObserver {
+                                    override fun onStateChanged(
+                                        source: androidx.lifecycle.LifecycleOwner,
+                                        event: Lifecycle.Event
+                                    ) {
+                                        if (event == Lifecycle.Event.ON_DESTROY) {
+                                            source.lifecycle.removeObserver(this)
+                                            registeredCleanupEntries.remove(backStackEntry.id)
+                                            viewerVm.closeViewerSession(sessionId)
+                                        }
+                                    }
+                                }
+                                backStackEntry.lifecycle.addObserver(observer)
+                            }
+                        }
                         PostViewerScreen(
                             viewModel = viewerVm,
+                            sessionId = sessionId,
                             videoDataSourceFactory = container.videoDataSourceFactory,
                             onBack = { navController.popBackStack() },
                             onSearchTag = ::searchTagInBrowse,
                             onOpenPool = { poolId, pool ->
-                                viewerVm.loadCollection(CollectionMode.PoolCollection(poolId, pool))
-                                navController.navigate(Routes.COLLECTION)
+                                openCollection(CollectionMode.PoolCollection(poolId, pool))
                             },
                             onOpenFamily = { rootParentId ->
-                                viewerVm.loadCollection(CollectionMode.FamilyCollection(rootParentId))
-                                navController.navigate(Routes.COLLECTION)
+                                openCollection(CollectionMode.FamilyCollection(rootParentId))
                             },
-                            onOpenPostId = { postId ->
-                                viewerVm.openPostById(postId)
-                            },
+                            onOpenPostId = ::openViewerPostId,
                             onCopyLink = ::copyPostLink,
                             onShareLink = ::sharePostLink,
                             onOpenUrl = ::openExternalUrl
                         )
                     }
 
-                    composable(Routes.COLLECTION) {
+                    composable(
+                        route = Routes.COLLECTION_PATTERN,
+                        arguments = listOf(navArgument(Routes.COLLECTION_ARG) { type = NavType.LongType })
+                    ) { backStackEntry ->
+                        val sessionId = backStackEntry.arguments?.getLong(Routes.COLLECTION_ARG) ?: -1L
+                        LaunchedEffect(backStackEntry.id) {
+                            if (registeredCleanupEntries.add(backStackEntry.id)) {
+                                val observer = object : LifecycleEventObserver {
+                                    override fun onStateChanged(
+                                        source: androidx.lifecycle.LifecycleOwner,
+                                        event: Lifecycle.Event
+                                    ) {
+                                        if (event == Lifecycle.Event.ON_DESTROY) {
+                                            source.lifecycle.removeObserver(this)
+                                            registeredCleanupEntries.remove(backStackEntry.id)
+                                            viewerVm.closeCollectionSession(sessionId)
+                                        }
+                                    }
+                                }
+                                backStackEntry.lifecycle.addObserver(observer)
+                            }
+                        }
                         CollectionScreen(
                             viewModel = viewerVm,
+                            sessionId = sessionId,
+                            scrollSyncTargets = scrollSyncTargets,
+                            onConsumeScrollSync = viewerVm::consumeScrollSyncTarget,
                             onBack = { navController.popBackStack() },
-                            onOpenPostViewer = { posts, idx ->
-                                viewerVm.openPosts(posts, idx)
-                                navController.navigate(Routes.VIEWER)
+                            onOpenPostViewer = { posts, idx, feedKey ->
+                                openViewerPosts(posts, idx, feedKey)
                             },
                             onAddToBrowse = ::searchTagInBrowse,
                             onCopyLink = ::copyPostLink,

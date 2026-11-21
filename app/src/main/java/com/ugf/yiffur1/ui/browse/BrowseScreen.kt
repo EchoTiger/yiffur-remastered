@@ -87,7 +87,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun BrowseScreen(
     viewModel: BrowseViewModel,
-    onOpenPostViewer: (posts: List<Post>, startIndex: Int) -> Unit,
+    scrollSyncTargets: Map<String, Int>,
+    onConsumeScrollSync: (String) -> Unit,
+    onOpenPostViewer: (posts: List<Post>, startIndex: Int, feedKey: String) -> Unit,
     onOpenBlacklist: () -> Unit,
     onCopyLink: (Post) -> Unit,
     onShareLink: (Post) -> Unit,
@@ -95,7 +97,9 @@ fun BrowseScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
+    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
+    val perfBudget by viewModel.performanceBudget.collectAsStateWithLifecycle()
+    val searchInput = viewModel.searchInput
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -138,10 +142,10 @@ fun BrowseScreen(
         ) {
             // Search Bar Header
             SearchAutocompleteBar(
-                query = state.searchInput,
+                query = searchInput,
                 onQueryChange = viewModel::onSearchInputChange,
                 onSubmit = viewModel::submitSearch,
-                suggestions = state.suggestions,
+                suggestions = suggestions,
                 recentQueries = state.recentQueries,
                 onClearSuggestions = viewModel::clearSuggestions,
                 onOpenFilterSheet = { showFilterSheet = true },
@@ -269,12 +273,12 @@ fun BrowseScreen(
                         }
                     }
 
-                    if (perfState.isAutoThrottled) {
+                    if (perfBudget.isAutoThrottled) {
                         Surface(
                             onClick = {
-                                val reason = perfState.activeReason ?: "Optimizing for device load"
+                                val reason = perfBudget.activeReason ?: "Optimizing for device load"
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Adaptive Engine: ${perfState.effectiveTier.label} ($reason)")
+                                    snackbarHostState.showSnackbar("Adaptive Engine: ${perfBudget.effectiveTier.label} ($reason)")
                                 }
                             },
                             shape = RoundedCornerShape(8.dp),
@@ -292,7 +296,7 @@ fun BrowseScreen(
                                     modifier = Modifier.size(12.dp)
                                 )
                                 Text(
-                                    text = perfState.effectiveTier.label,
+                                    text = perfBudget.effectiveTier.label,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                                     fontWeight = FontWeight.Medium
@@ -426,20 +430,23 @@ fun BrowseScreen(
                     }
 
                     else -> {
+                        val feedKey = "browse:${state.activeTab?.id ?: 0L}"
                         PostFeedGrid(
                             posts = state.posts,
                             settings = state.settings,
-                            budget = perfState.budget,
+                            budget = perfBudget.budget,
                             localFavoriteIds = state.localFavoriteIds,
                             isLoadingMore = state.isLoadingMore,
                             hasMore = state.hasMore,
                             onLoadMore = viewModel::loadNextPage,
-                            onPostClick = { idx -> onOpenPostViewer(state.posts, idx) },
+                            onPostClick = { idx -> onOpenPostViewer(state.posts, idx, feedKey) },
                             onQuickFavorite = viewModel::quickToggleFavorite,
                             onDownload = viewModel::downloadPost,
                             onCopyLink = onCopyLink,
                             onShareLink = onShareLink,
                             onOpenInBrowser = onOpenInBrowser,
+                            scrollToPostId = scrollSyncTargets[feedKey],
+                            onScrollToPostConsumed = { onConsumeScrollSync(feedKey) },
                             contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 88.dp)
                         )
                     }
@@ -456,7 +463,7 @@ fun BrowseScreen(
             onSelectOrder = viewModel::selectOrder,
             onSelectMediaFilter = viewModel::selectMediaFilter,
             onReset = viewModel::resetFilters,
-            onApplyAndSearch = { viewModel.submitSearch(state.searchInput) },
+            onApplyAndSearch = { viewModel.submitSearch(searchInput) },
             onDismiss = { showFilterSheet = false }
         )
     }
@@ -522,12 +529,12 @@ fun BrowseScreen(
                     )
                 }
 
-                if (state.searchInput.isNotBlank()) {
+                if (searchInput.isNotBlank()) {
                     OutlinedButton(
                         onClick = {
                             viewModel.addSavedSearch(
-                                title = state.searchInput.take(28),
-                                query = state.searchInput
+                                title = searchInput.take(28),
+                                query = searchInput
                             )
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -535,7 +542,7 @@ fun BrowseScreen(
                     ) {
                         Icon(Icons.Rounded.Bookmark, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Save current search: \"${state.searchInput.take(24)}\"")
+                        Text("Save current search: \"${searchInput.take(24)}\"")
                     }
                 }
 
@@ -598,7 +605,7 @@ fun BrowseScreen(
     if (showAddSavedSearchDialog || editingSavedSearch != null) {
         val target = editingSavedSearch
         var titleText by remember(target) { mutableStateOf(target?.title ?: "") }
-        var tagsText by remember(target) { mutableStateOf(target?.query ?: state.searchInput) }
+        var tagsText by remember(target) { mutableStateOf(target?.query ?: searchInput) }
 
         AlertDialog(
             onDismissRequest = {

@@ -108,9 +108,9 @@ data class DeviceHardwareProfile(
 
     val memoryCachePercent: Double
         get() = when {
-            isLowRamDevice || totalRamMb in 1..2560 -> 0.14
-            totalRamMb in 2561..4608 -> 0.19
-            else -> 0.24
+            isLowRamDevice || totalRamMb in 1..2560 -> 0.12
+            totalRamMb in 2561..4608 -> 0.15
+            else -> 0.18
         }
 
     val imageDiskCacheBytes: Long
@@ -267,7 +267,36 @@ data class AdaptivePerformanceState(
 ) {
     val isAutoThrottled: Boolean
         get() = mode == PerformanceMode.ADAPTIVE_AUTO && effectiveTier.rank > hardware.baselineTier.rank
+
+    fun toUiBudget(): PerformanceUiBudget = PerformanceUiBudget(
+        effectiveTier = effectiveTier,
+        budget = budget,
+        hardware = hardware,
+        isAutoThrottled = isAutoThrottled,
+        activeReason = activeReason
+    )
 }
+
+/**
+ * Stable UI-facing performance snapshot excluding fast-changing telemetry (such as `smoothnessPercent`)
+ * so feeds and media viewers ONLY recompose when the active tier, budget, or throttle reason changes.
+ */
+data class PerformanceUiBudget(
+    val effectiveTier: PerformanceTier = PerformanceTier.BALANCED,
+    val budget: AdaptiveBudget = AdaptiveBudget.forTier(PerformanceTier.BALANCED, false),
+    val hardware: DeviceHardwareProfile = DeviceHardwareProfile(
+        totalRamMb = 4096,
+        memoryClassMb = 256,
+        cpuCores = 6,
+        apiLevel = Build.VERSION.SDK_INT,
+        isLowRamDevice = false,
+        hasHwAv1 = false,
+        hasHwVp9 = true,
+        hasHwH264 = true
+    ),
+    val isAutoThrottled: Boolean = false,
+    val activeReason: String? = null
+)
 
 /**
  * Pure, deterministic tier solver that computes the target [PerformanceTier] and user-facing
@@ -502,6 +531,9 @@ class AdaptivePerformanceEngine(
         )
     )
     val state: StateFlow<AdaptivePerformanceState> = _state.asStateFlow()
+
+    private val _budgetState = MutableStateFlow(_state.value.toUiBudget())
+    val budgetState: StateFlow<PerformanceUiBudget> = _budgetState.asStateFlow()
 
     init {
         attachSystemObservers()
@@ -756,7 +788,7 @@ class AdaptivePerformanceEngine(
             decision.reason
         }
 
-        _state.value = AdaptivePerformanceState(
+        val nextFullState = AdaptivePerformanceState(
             mode = currentMode,
             effectiveTier = chosenTier,
             budget = AdaptiveBudget.forTier(chosenTier, conserveBandwidth),
@@ -770,6 +802,11 @@ class AdaptivePerformanceEngine(
             smoothnessPercent = smoothnessPercent,
             activeReason = reason
         )
+        _state.value = nextFullState
+        val nextUiBudget = nextFullState.toUiBudget()
+        if (_budgetState.value != nextUiBudget) {
+            _budgetState.value = nextUiBudget
+        }
     }
 
     private fun mapThermalStatus(status: Int): ThermalPressure = when {

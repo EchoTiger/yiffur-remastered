@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -43,6 +44,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,7 +72,8 @@ import coil3.compose.AsyncImage
 import com.ugf.yiffur1.domain.model.Post
 import com.ugf.yiffur1.domain.model.VideoQualityPreference
 import com.ugf.yiffur1.domain.model.VideoVariant
-import com.ugf.yiffur1.domain.perf.AdaptivePerformanceState
+import com.ugf.yiffur1.domain.perf.AdaptiveBudget
+import com.ugf.yiffur1.domain.perf.DeviceHardwareProfile
 import com.ugf.yiffur1.util.Formatters
 import kotlinx.coroutines.delay
 
@@ -87,7 +90,8 @@ import kotlinx.coroutines.delay
 fun VideoPlayerView(
     post: Post,
     videoDataSourceFactory: DataSource.Factory,
-    perfState: AdaptivePerformanceState,
+    budget: AdaptiveBudget,
+    hardware: DeviceHardwareProfile,
     defaultQuality: VideoQualityPreference,
     defaultMuted: Boolean,
     isActivePage: Boolean,
@@ -95,14 +99,32 @@ fun VideoPlayerView(
     onToggleChrome: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val budget = perfState.budget
-    val hardware = perfState.hardware
+    val posterUrl = post.sampleUrl ?: post.previewUrl ?: post.previewFallbackUrl
+
+    // Never allocate ExoPlayer, SurfaceView, or hardware MediaCodec decoders for offscreen pager pages.
+    // Releasing immediately on swipe keeps active decoders <= 1 and eliminates video session memory bloat;
+    // Media3 SimpleCache ensures revisiting a video resumes instantaneously from local disk.
+    if (!isActivePage) {
+        Box(
+            modifier = modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!posterUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = posterUrl,
+                    contentDescription = "Video preview",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+        return
+    }
 
     var userTappedPlay by remember(post.id) { mutableStateOf(false) }
 
     // In Survival mode, avoid allocating ExoPlayer / hardware codec instances until user taps Play
     if (budget.tapToPlayAnimatedMedia && !userTappedPlay) {
-        val posterUrl = post.sampleUrl ?: post.previewUrl ?: post.previewFallbackUrl
         val recommended = remember(post.id, defaultQuality, budget.recommendedVideoMaxHeight) {
             post.selectOptimalVideoVariant(defaultQuality, hardware, budget)
         }
@@ -260,6 +282,9 @@ fun VideoPlayerView(
         exoPlayer.playbackParameters = PlaybackParameters(playbackSpeed)
     }
 
+    val currentIsActive by rememberUpdatedState(isActivePage)
+    var userPaused by remember(post.id) { mutableStateOf(false) }
+
     DisposableEffect(exoPlayer, lifecycleOwner) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -276,7 +301,7 @@ fun VideoPlayerView(
         val lifecycleObserver = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> exoPlayer.pause()
-                Lifecycle.Event.ON_RESUME -> if (isActivePage) exoPlayer.play()
+                Lifecycle.Event.ON_RESUME -> if (currentIsActive && !userPaused) exoPlayer.play()
                 else -> Unit
             }
         }
@@ -339,7 +364,8 @@ fun VideoPlayerView(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 74.dp),
+                    .navigationBarsPadding()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 72.dp),
                 shape = RoundedCornerShape(16.dp),
                 color = Color.Black.copy(alpha = 0.72f)
             ) {
@@ -387,7 +413,13 @@ fun VideoPlayerView(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
                                 onClick = {
-                                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                                    if (exoPlayer.isPlaying) {
+                                        userPaused = true
+                                        exoPlayer.pause()
+                                    } else {
+                                        userPaused = false
+                                        exoPlayer.play()
+                                    }
                                 },
                                 modifier = Modifier
                                     .size(36.dp)

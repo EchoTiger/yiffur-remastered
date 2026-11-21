@@ -6,6 +6,7 @@ import com.ugf.yiffur1.domain.model.Rating
 import com.ugf.yiffur1.domain.model.VideoQualityPreference
 import com.ugf.yiffur1.domain.model.VideoVariant
 import com.ugf.yiffur1.domain.perf.AdaptiveBudget
+import com.ugf.yiffur1.domain.perf.AdaptivePerformanceState
 import com.ugf.yiffur1.domain.perf.AdaptiveTierCalculator
 import com.ugf.yiffur1.domain.perf.DeviceHardwareProfile
 import com.ugf.yiffur1.domain.perf.JankPressure
@@ -242,6 +243,19 @@ class AdaptivePerformanceEngineTest {
         val meteredBudget = AdaptiveBudget.forTier(PerformanceTier.ULTRA, conserveBandwidth = true)
         assertFalse(meteredBudget.allowImmediateHdFullscreen)
         assertEquals(720, meteredBudget.recommendedVideoMaxHeight)
+    }
+
+    @Test
+    fun uiBudgetIgnoresSmoothnessTicksToPreventFeedRecompositions() {
+        val s1 = AdaptivePerformanceState(
+            mode = PerformanceMode.ADAPTIVE_AUTO,
+            effectiveTier = PerformanceTier.BALANCED,
+            budget = AdaptiveBudget.forTier(PerformanceTier.BALANCED, false),
+            hardware = midRangeHw,
+            smoothnessPercent = 98
+        )
+        val s2 = s1.copy(smoothnessPercent = 86)
+        assertEquals(s1.toUiBudget(), s2.toUiBudget())
     }
 
     private fun samplePost(

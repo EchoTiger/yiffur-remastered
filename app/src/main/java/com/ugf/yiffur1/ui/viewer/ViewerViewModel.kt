@@ -15,6 +15,7 @@ import com.ugf.yiffur1.domain.model.Post
 import com.ugf.yiffur1.domain.model.PostNote
 import com.ugf.yiffur1.domain.model.PostSet
 import com.ugf.yiffur1.domain.model.WikiPage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,12 +27,26 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
-data class ViewerSessionState(
+/**
+ * Isolated per-route viewer session so nested navigation (e.g., Browse -> Post #35 ->
+ * Parent/Children Collection -> Child Post -> Back -> Back) never overwrites an earlier
+ * viewer's post list or crashes with IndexOutOfBoundsException.
+ */
+data class ViewerSession(
+    val sessionId: Long,
     val posts: List<Post> = emptyList(),
     val initialIndex: Int = 0,
+    val currentIndex: Int = initialIndex,
+    val hasSwipedFromInitial: Boolean = false,
+    val sourceFeedKey: String? = null,
     val isLoadingSinglePost: Boolean = false,
-    val error: String? = null,
+    val error: String? = null
+)
+
+data class ViewerMetadataState(
     val commentsByPost: Map<Int, List<Comment>> = emptyMap(),
     val loadingCommentsFor: Set<Int> = emptySet(),
     val notesByPost: Map<Int, List<PostNote>> = emptyMap(),
@@ -52,6 +67,7 @@ sealed interface CollectionMode {
 }
 
 data class CollectionUiState(
+    val sessionId: Long = 0L,
     val title: String = "",
     val subtitle: String = "",
     val description: String = "",
@@ -62,16 +78,191 @@ data class CollectionUiState(
     val error: String? = null
 )
 
+/**
+ * Inserts/updates [key] -> [value] into an insertion-ordered map while capping its size at [maxEntries]
+ * (LRU eviction of oldest keys) so long viewing sessions keep memory strictly bounded.
+ */
+internal fun <K, V> putBoundedLru(
+    current: Map<K, V>,
+    key: K,
+    value: V,
+    maxEntries: Int
+): Map<K, V> {
+    val next = LinkedHashMap<K, V>(current.size + 1)
+    for ((k, v) in current) {
+        if (k != key) next[k] = v
+    }
+    next[key] = value
+    while (next.size > maxEntries) {
+        val oldestKey = next.keys.firstOrNull() ?: break
+        next.remove(oldestKey)
+    }
+    return next
+}
+
+/**
+ * Pure, unit-testable state store managing isolated nested viewer/collection sessions and
+ * gallery scroll-sync targets.
+ */
+class ViewerSessionStore {
+    private val nextSessionId = AtomicLong(1L)
+
+    private val _viewerSessions = MutableStateFlow<Map<Long, ViewerSession>>(emptyMap())
+    val viewerSessions: StateFlow<Map<Long, ViewerSession>> = _viewerSessions.asStateFlow()
+
+    private val _collectionSessions = MutableStateFlow<Map<Long, CollectionUiState>>(emptyMap())
+    val collectionSessions: StateFlow<Map<Long, CollectionUiState>> = _collectionSessions.asStateFlow()
+
+    private val _scrollSyncTargets = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val scrollSyncTargets: StateFlow<Map<String, Int>> = _scrollSyncTargets.asStateFlow()
+
+    fun openPostsSession(
+        posts: List<Post>,
+        startIndex: Int,
+        sourceFeedKey: String? = null
+    ): Long {
+        val id = nextSessionId.getAndIncrement()
+        val clampedStart = if (posts.isEmpty()) 0 else startIndex.coerceIn(0, posts.lastIndex)
+        val session = ViewerSession(
+            sessionId = id,
+            posts = posts,
+            initialIndex = clampedStart,
+            currentIndex = clampedStart,
+            hasSwipedFromInitial = false,
+            sourceFeedKey = sourceFeedKey,
+            isLoadingSinglePost = false,
+            error = null
+        )
+        _viewerSessions.update { it + (id to session) }
+        return id
+    }
+
+    fun openLoadingSinglePostSession(): Long {
+        val id = nextSessionId.getAndIncrement()
+        val session = ViewerSession(
+            sessionId = id,
+            posts = emptyList(),
+            initialIndex = 0,
+            currentIndex = 0,
+            isLoadingSinglePost = true,
+            error = null
+        )
+        _viewerSessions.update { it + (id to session) }
+        return id
+    }
+
+    fun resolveSinglePostSession(sessionId: Long, post: Post?, error: String?) {
+        _viewerSessions.update { map ->
+            val existing = map[sessionId] ?: return@update map
+            map + (sessionId to existing.copy(
+                posts = if (post != null) listOf(post) else emptyList(),
+                initialIndex = 0,
+                currentIndex = 0,
+                isLoadingSinglePost = false,
+                error = error
+            ))
+        }
+    }
+
+    fun reportViewerPosition(sessionId: Long, pageIndex: Int, postId: Int) {
+        val session = _viewerSessions.value[sessionId] ?: return
+        val clampedIndex = if (session.posts.isEmpty()) 0 else pageIndex.coerceIn(0, session.posts.lastIndex)
+        val swiped = session.hasSwipedFromInitial || clampedIndex != session.initialIndex
+
+        if (session.currentIndex != clampedIndex || session.hasSwipedFromInitial != swiped) {
+            _viewerSessions.update { map ->
+                val cur = map[sessionId] ?: return@update map
+                map + (sessionId to cur.copy(currentIndex = clampedIndex, hasSwipedFromInitial = swiped))
+            }
+        }
+
+        val feedKey = session.sourceFeedKey
+        if (feedKey != null && swiped) {
+            _scrollSyncTargets.update { it + (feedKey to postId) }
+        }
+    }
+
+    fun consumeScrollSyncTarget(feedKey: String) {
+        if (feedKey in _scrollSyncTargets.value) {
+            _scrollSyncTargets.update { it - feedKey }
+        }
+    }
+
+    fun openLoadingCollectionSession(): Long {
+        val id = nextSessionId.getAndIncrement()
+        _collectionSessions.update { it + (id to CollectionUiState(sessionId = id, isLoading = true)) }
+        return id
+    }
+
+    fun resolveCollectionSession(sessionId: Long, state: CollectionUiState) {
+        _collectionSessions.update { map ->
+            if (sessionId !in map) return@update map
+            map + (sessionId to state.copy(sessionId = sessionId))
+        }
+    }
+
+    fun reverseCollectionOrder(sessionId: Long) {
+        _collectionSessions.update { map ->
+            val cur = map[sessionId] ?: return@update map
+            map + (sessionId to cur.copy(posts = cur.posts.asReversed()))
+        }
+    }
+
+    fun updatePostAcrossSessions(updated: Post) {
+        _viewerSessions.update { map ->
+            map.mapValues { (_, session) ->
+                if (session.posts.any { it.id == updated.id }) {
+                    session.copy(posts = session.posts.map { if (it.id == updated.id) updated else it })
+                } else {
+                    session
+                }
+            }
+        }
+        _collectionSessions.update { map ->
+            map.mapValues { (_, col) ->
+                if (col.posts.any { it.id == updated.id }) {
+                    col.copy(posts = col.posts.map { if (it.id == updated.id) updated else it })
+                } else {
+                    col
+                }
+            }
+        }
+    }
+
+    fun closeViewerSession(sessionId: Long) {
+        if (sessionId in _viewerSessions.value) {
+            _viewerSessions.update { it - sessionId }
+        }
+    }
+
+    fun closeCollectionSession(sessionId: Long) {
+        if (sessionId in _collectionSessions.value) {
+            _collectionSessions.update { it - sessionId }
+        }
+    }
+
+    fun retainOnlySessions(activeViewerIds: Set<Long>, activeCollectionIds: Set<Long>) {
+        _viewerSessions.update { map ->
+            if (map.keys.all { it in activeViewerIds }) map else map.filterKeys { it in activeViewerIds }
+        }
+        _collectionSessions.update { map ->
+            if (map.keys.all { it in activeCollectionIds }) map else map.filterKeys { it in activeCollectionIds }
+        }
+    }
+}
+
 class ViewerViewModel(
     private val container: AppContainer,
     private val onGlobalPostUpdated: (Post) -> Unit
 ) : ViewModel() {
 
-    private val _viewerState = MutableStateFlow(ViewerSessionState())
-    val viewerState: StateFlow<ViewerSessionState> = _viewerState.asStateFlow()
+    private val sessionStore = ViewerSessionStore()
+    val viewerSessions: StateFlow<Map<Long, ViewerSession>> = sessionStore.viewerSessions
+    val collectionSessions: StateFlow<Map<Long, CollectionUiState>> = sessionStore.collectionSessions
+    val scrollSyncTargets: StateFlow<Map<String, Int>> = sessionStore.scrollSyncTargets
 
-    private val _collectionState = MutableStateFlow(CollectionUiState())
-    val collectionState: StateFlow<CollectionUiState> = _collectionState.asStateFlow()
+    private val _metadataState = MutableStateFlow(ViewerMetadataState())
+    val metadataState: StateFlow<ViewerMetadataState> = _metadataState.asStateFlow()
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages = _messages.asSharedFlow()
@@ -82,7 +273,7 @@ class ViewerViewModel(
     val settings = container.settingsRepository.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.ugf.yiffur1.domain.model.AppSettings())
 
-    val performanceState = container.performanceEngine.state
+    val performanceBudget = container.performanceEngine.budgetState
 
     val localFavoriteIds = container.favoritesRepository.localFavoriteIdsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
@@ -94,73 +285,90 @@ class ViewerViewModel(
         .map { rules -> rules.map { it.rule.trim().lowercase() }.toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
-    fun openPosts(posts: List<Post>, startIndex: Int) {
-        _viewerState.update {
-            it.copy(
-                posts = posts,
-                initialIndex = startIndex.coerceIn(0, (posts.size - 1).coerceAtLeast(0)),
-                isLoadingSinglePost = false,
-                error = null
-            )
-        }
-    }
+    private val seenWritesSincePrune = AtomicInteger(0)
 
-    fun openPostById(postId: Int) {
+    fun openPostsSession(posts: List<Post>, startIndex: Int, sourceFeedKey: String? = null): Long =
+        sessionStore.openPostsSession(posts, startIndex, sourceFeedKey)
+
+    fun openPostByIdSession(postId: Int): Long {
+        val sessionId = sessionStore.openLoadingSinglePostSession()
         viewModelScope.launch {
-            _viewerState.update {
-                it.copy(posts = emptyList(), initialIndex = 0, isLoadingSinglePost = true, error = null)
-            }
             runCatching { container.postRepository.getPost(postId) }
                 .onSuccess { post ->
-                    _viewerState.update {
-                        it.copy(posts = listOf(post), initialIndex = 0, isLoadingSinglePost = false)
-                    }
+                    sessionStore.resolveSinglePostSession(sessionId, post = post, error = null)
                 }
                 .onFailure { err ->
-                    _viewerState.update {
-                        it.copy(isLoadingSinglePost = false, error = ApiErrorParser.toUserMessage(err))
-                    }
+                    sessionStore.resolveSinglePostSession(
+                        sessionId,
+                        post = null,
+                        error = ApiErrorParser.toUserMessage(err)
+                    )
                 }
         }
+        return sessionId
+    }
+
+    fun reportViewerPosition(sessionId: Long, pageIndex: Int, postId: Int) {
+        sessionStore.reportViewerPosition(sessionId, pageIndex, postId)
+    }
+
+    fun consumeScrollSyncTarget(feedKey: String) {
+        sessionStore.consumeScrollSyncTarget(feedKey)
+    }
+
+    fun closeViewerSession(sessionId: Long) {
+        sessionStore.closeViewerSession(sessionId)
+    }
+
+    fun closeCollectionSession(sessionId: Long) {
+        sessionStore.closeCollectionSession(sessionId)
+    }
+
+    fun retainOnlySessions(activeViewerIds: Set<Long>, activeCollectionIds: Set<Long>) {
+        sessionStore.retainOnlySessions(activeViewerIds, activeCollectionIds)
     }
 
     fun loadCommentsIfNeeded(postId: Int, force: Boolean = false) {
-        val current = _viewerState.value
+        val current = _metadataState.value
         if (!force && (postId in current.commentsByPost || postId in current.loadingCommentsFor)) return
         viewModelScope.launch {
-            _viewerState.update { it.copy(loadingCommentsFor = it.loadingCommentsFor + postId) }
+            _metadataState.update { it.copy(loadingCommentsFor = it.loadingCommentsFor + postId) }
             runCatching { container.postRepository.getComments(postId) }
                 .onSuccess { list ->
-                    _viewerState.update {
+                    _metadataState.update {
                         it.copy(
-                            commentsByPost = it.commentsByPost + (postId to list),
+                            commentsByPost = putBoundedLru(it.commentsByPost, postId, list, MAX_CACHED_METADATA_POSTS),
                             loadingCommentsFor = it.loadingCommentsFor - postId
                         )
                     }
                 }
                 .onFailure { err ->
-                    _viewerState.update { it.copy(loadingCommentsFor = it.loadingCommentsFor - postId) }
+                    _metadataState.update { it.copy(loadingCommentsFor = it.loadingCommentsFor - postId) }
                     _messages.tryEmit(ApiErrorParser.toUserMessage(err))
                 }
         }
     }
 
     fun loadNotesIfNeeded(post: Post) {
-        if (!post.hasNotes || post.id in _viewerState.value.notesByPost) return
+        if (!post.hasNotes || post.id in _metadataState.value.notesByPost) return
         viewModelScope.launch {
             runCatching { container.postRepository.getNotes(post.id) }
                 .onSuccess { notes ->
-                    _viewerState.update { it.copy(notesByPost = it.notesByPost + (post.id to notes)) }
+                    _metadataState.update {
+                        it.copy(notesByPost = putBoundedLru(it.notesByPost, post.id, notes, MAX_CACHED_METADATA_POSTS))
+                    }
                 }
         }
     }
 
     fun loadPostPoolsIfNeeded(post: Post) {
-        if (post.pools.isEmpty() || post.id in _viewerState.value.poolsByPost) return
+        if (post.pools.isEmpty() || post.id in _metadataState.value.poolsByPost) return
         viewModelScope.launch {
             runCatching { container.postRepository.getPoolsByIds(post.pools) }
                 .onSuccess { pools ->
-                    _viewerState.update { it.copy(poolsByPost = it.poolsByPost + (post.id to pools)) }
+                    _metadataState.update {
+                        it.copy(poolsByPost = putBoundedLru(it.poolsByPost, post.id, pools, MAX_CACHED_METADATA_POSTS))
+                    }
                 }
         }
     }
@@ -210,13 +418,18 @@ class ViewerViewModel(
             return
         }
         viewModelScope.launch {
-            _viewerState.update { it.copy(isPostingComment = true) }
+            _metadataState.update { it.copy(isPostingComment = true) }
             runCatching { container.postRepository.createComment(post.id, text, doNotBump) }
                 .onSuccess { created ->
-                    _viewerState.update { st ->
+                    _metadataState.update { st ->
                         val existing = st.commentsByPost[post.id].orEmpty()
                         st.copy(
-                            commentsByPost = st.commentsByPost + (post.id to (existing + created)),
+                            commentsByPost = putBoundedLru(
+                                st.commentsByPost,
+                                post.id,
+                                existing + created,
+                                MAX_CACHED_METADATA_POSTS
+                            ),
                             isPostingComment = false
                         )
                     }
@@ -224,7 +437,7 @@ class ViewerViewModel(
                     _messages.tryEmit("Comment posted!")
                 }
                 .onFailure { err ->
-                    _viewerState.update { it.copy(isPostingComment = false) }
+                    _metadataState.update { it.copy(isPostingComment = false) }
                     _messages.tryEmit(ApiErrorParser.toUserMessage(err))
                 }
         }
@@ -236,11 +449,18 @@ class ViewerViewModel(
         viewModelScope.launch {
             runCatching { container.postRepository.updateComment(commentId, text) }
                 .onSuccess {
-                    _viewerState.update { st ->
+                    _metadataState.update { st ->
                         val updatedList = st.commentsByPost[postId].orEmpty().map {
                             if (it.id == commentId) it.copy(body = text) else it
                         }
-                        st.copy(commentsByPost = st.commentsByPost + (postId to updatedList))
+                        st.copy(
+                            commentsByPost = putBoundedLru(
+                                st.commentsByPost,
+                                postId,
+                                updatedList,
+                                MAX_CACHED_METADATA_POSTS
+                            )
+                        )
                     }
                     _messages.tryEmit("Comment updated")
                 }
@@ -256,11 +476,18 @@ class ViewerViewModel(
         viewModelScope.launch {
             runCatching { container.postRepository.voteComment(comment.id, delta) }
                 .onSuccess { resp ->
-                    _viewerState.update { st ->
+                    _metadataState.update { st ->
                         val updated = st.commentsByPost[postId].orEmpty().map {
                             if (it.id == comment.id) it.copy(score = resp.score, userVote = resp.ourScore) else it
                         }
-                        st.copy(commentsByPost = st.commentsByPost + (postId to updated))
+                        st.copy(
+                            commentsByPost = putBoundedLru(
+                                st.commentsByPost,
+                                postId,
+                                updated,
+                                MAX_CACHED_METADATA_POSTS
+                            )
+                        )
                     }
                 }
                 .onFailure { err -> _messages.tryEmit(ApiErrorParser.toUserMessage(err)) }
@@ -302,43 +529,48 @@ class ViewerViewModel(
     }
 
     fun markPostSeen(postId: Int, engagementScore: Int = 1) {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                container.database.seenPostDao().upsert(
+                val dao = container.database.seenPostDao()
+                dao.upsert(
                     SeenPostEntity(
                         postId = postId,
                         seenAtMs = System.currentTimeMillis(),
                         engagementScore = engagementScore
                     )
                 )
+                if (seenWritesSincePrune.incrementAndGet() >= 50) {
+                    seenWritesSincePrune.set(0)
+                    dao.pruneOld(keepCount = 2500)
+                }
             }
         }
     }
 
     fun openWiki(tagTitle: String) {
         val clean = tagTitle.trim().replace(' ', '_')
-        _viewerState.update { it.copy(activeWikiTitle = clean, activeWikiPage = null, isLoadingWiki = true) }
+        _metadataState.update { it.copy(activeWikiTitle = clean, activeWikiPage = null, isLoadingWiki = true) }
         viewModelScope.launch {
             val page = runCatching { container.postRepository.getWikiPage(clean) }.getOrNull()
-            _viewerState.update { it.copy(activeWikiPage = page, isLoadingWiki = false) }
+            _metadataState.update { it.copy(activeWikiPage = page, isLoadingWiki = false) }
         }
     }
 
     fun dismissWiki() {
-        _viewerState.update { it.copy(activeWikiTitle = null, activeWikiPage = null, isLoadingWiki = false) }
+        _metadataState.update { it.copy(activeWikiTitle = null, activeWikiPage = null, isLoadingWiki = false) }
     }
 
     fun openArtist(artistName: String) {
         val clean = artistName.trim()
-        _viewerState.update { it.copy(activeArtistName = clean, activeArtistInfo = null, isLoadingArtist = true) }
+        _metadataState.update { it.copy(activeArtistName = clean, activeArtistInfo = null, isLoadingArtist = true) }
         viewModelScope.launch {
             val info = runCatching { container.postRepository.getArtistInfo(clean) }.getOrNull()
-            _viewerState.update { it.copy(activeArtistInfo = info, isLoadingArtist = false) }
+            _metadataState.update { it.copy(activeArtistInfo = info, isLoadingArtist = false) }
         }
     }
 
     fun dismissArtist() {
-        _viewerState.update { it.copy(activeArtistName = null, activeArtistInfo = null, isLoadingArtist = false) }
+        _metadataState.update { it.copy(activeArtistName = null, activeArtistInfo = null, isLoadingArtist = false) }
     }
 
     fun downloadPost(post: Post) {
@@ -363,10 +595,10 @@ class ViewerViewModel(
 
     // ==================== Collection (Pools, Post Sets, Parent/Children) ====================
 
-    fun loadCollection(mode: CollectionMode) {
+    fun loadCollectionSession(mode: CollectionMode): Long {
+        val sessionId = sessionStore.openLoadingCollectionSession()
         viewModelScope.launch {
             val currentSettings = container.settingsRepository.settingsFlow.first()
-            _collectionState.value = CollectionUiState(isLoading = true)
             runCatching {
                 when (mode) {
                     is CollectionMode.PoolCollection -> {
@@ -374,6 +606,7 @@ class ViewerViewModel(
                         val posts = container.postRepository.getPoolPostsOrdered(pool)
                             .filter { !it.isHiddenOrDeleted && currentSettings.allowsRating(it.rating) }
                         CollectionUiState(
+                            sessionId = sessionId,
                             title = pool.displayName,
                             subtitle = "Pool #${pool.id} · ${posts.size} posts · by ${pool.creatorName}",
                             description = pool.description,
@@ -388,6 +621,7 @@ class ViewerViewModel(
                         val posts = container.postRepository.getFamilyPosts(mode.rootParentId)
                             .filter { !it.isHiddenOrDeleted && currentSettings.allowsRating(it.rating) }
                         CollectionUiState(
+                            sessionId = sessionId,
                             title = "Related Posts (#${mode.rootParentId})",
                             subtitle = "Parent & ${((posts.size - 1).coerceAtLeast(0))} children",
                             description = "",
@@ -402,6 +636,7 @@ class ViewerViewModel(
                         val posts = container.postRepository.getPostSetPosts(mode.postSet, page = 1, limit = 150)
                             .filter { !it.isHiddenOrDeleted && currentSettings.allowsRating(it.rating) }
                         CollectionUiState(
+                            sessionId = sessionId,
                             title = mode.postSet.name,
                             subtitle = "Set #${mode.postSet.id} (${mode.postSet.shortname}) · ${mode.postSet.postCount} posts",
                             description = mode.postSet.description,
@@ -413,27 +648,31 @@ class ViewerViewModel(
                     }
                 }
             }.onSuccess { ui ->
-                _collectionState.value = ui
+                sessionStore.resolveCollectionSession(sessionId, ui)
             }.onFailure { err ->
-                _collectionState.value = CollectionUiState(
-                    isLoading = false,
-                    error = ApiErrorParser.toUserMessage(err)
+                sessionStore.resolveCollectionSession(
+                    sessionId,
+                    CollectionUiState(
+                        sessionId = sessionId,
+                        isLoading = false,
+                        error = ApiErrorParser.toUserMessage(err)
+                    )
                 )
             }
         }
+        return sessionId
     }
 
-    fun reverseCollectionOrder() {
-        _collectionState.update { it.copy(posts = it.posts.asReversed()) }
+    fun reverseCollectionOrder(sessionId: Long) {
+        sessionStore.reverseCollectionOrder(sessionId)
     }
 
     private fun applyPostUpdate(updated: Post) {
-        _viewerState.update { st ->
-            st.copy(posts = st.posts.map { if (it.id == updated.id) updated else it })
-        }
-        _collectionState.update { st ->
-            st.copy(posts = st.posts.map { if (it.id == updated.id) updated else it })
-        }
+        sessionStore.updatePostAcrossSessions(updated)
         onGlobalPostUpdated(updated)
+    }
+
+    companion object {
+        private const val MAX_CACHED_METADATA_POSTS = 24
     }
 }

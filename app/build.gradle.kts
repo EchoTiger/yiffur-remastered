@@ -40,12 +40,12 @@ android {
         minSdk = 24
         targetSdk = 35
         // Strictly higher than both legacy v1.001 (code 2) and legacy v1.303 (code 303) for seamless in-place upgrades
-        versionCode = 20200
-        versionName = "2.2.0"
+        versionCode = 20201
+        versionName = "2.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "USER_AGENT", "\"Yiffur/2.2.0 (by Echo on e621)\"")
+        buildConfigField("String", "USER_AGENT", "\"Yiffur/2.2.1 (by Echo on e621)\"")
         buildConfigField("String", "GITHUB_REPO", "\"EchoTiger/yiffur-remastered\"")
         buildConfigField("boolean", "FIREBASE_ENABLED", hasGoogleServices.toString())
     }

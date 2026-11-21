@@ -147,6 +147,9 @@ interface SeenPostDao {
     @Query("SELECT * FROM seen_posts ORDER BY seenAtMs DESC LIMIT 2500")
     fun observeRecent(): Flow<List<SeenPostEntity>>
 
+    @Query("SELECT COUNT(*) FROM seen_posts")
+    fun observeCount(): Flow<Int>
+
     @Query("SELECT * FROM seen_posts ORDER BY seenAtMs DESC LIMIT :limit")
     suspend fun getRecentSnapshot(limit: Int = 2500): List<SeenPostEntity>
 

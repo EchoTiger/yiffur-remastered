@@ -1,5 +1,8 @@
 package com.ugf.yiffur1.ui.browse
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ugf.yiffur1.data.api.ApiErrorParser
@@ -47,10 +50,8 @@ data class TabFeedCache(
 )
 
 data class BrowseUiState(
-    val searchInput: String = "",
     val selectedOrder: SearchOrder = SearchOrder.RECENT,
     val selectedMediaFilter: MediaFilter = MediaFilter.ALL,
-    val suggestions: List<TagSuggestion> = emptyList(),
     val tabs: List<BrowseTabEntity> = emptyList(),
     val activeTab: BrowseTabEntity? = null,
     val posts: List<Post> = emptyList(),
@@ -77,16 +78,25 @@ class BrowseViewModel(
     private val historyDao = container.database.searchHistoryDao()
     private val blacklistDao = container.database.blacklistDao()
 
-    private val _searchInput = MutableStateFlow("")
+    /**
+     * Synchronous Compose Snapshot text state: prevents IME cursor displacement caused by
+     * async StateFlow/Dispatchers.Default round-trips and avoids re-filtering posts on every keystroke.
+     */
+    var searchInput by mutableStateOf("")
+        private set
+
     private val _selectedOrder = MutableStateFlow(SearchOrder.RECENT)
     private val _selectedMediaFilter = MutableStateFlow(MediaFilter.ALL)
     private val _suggestions = MutableStateFlow<List<TagSuggestion>>(emptyList())
+    val suggestions: StateFlow<List<TagSuggestion>> = _suggestions.asStateFlow()
+
     private val _tabCaches = MutableStateFlow<Map<Long, TabFeedCache>>(emptyMap())
+    private val recentTabAccessOrder = ArrayDeque<Long>()
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
 
-    val performanceState = container.performanceEngine.state
+    val performanceBudget = container.performanceEngine.budgetState
 
     private var autocompleteJob: Job? = null
     private var lastObservedHost: ApiHost? = null
@@ -96,9 +106,7 @@ class BrowseViewModel(
     }
 
     val uiState: StateFlow<BrowseUiState> = combine(
-        combine(_searchInput, _selectedOrder, _selectedMediaFilter, _suggestions) { q, o, m, s ->
-            SearchDraft(q, o, m, s)
-        },
+        combine(_selectedOrder, _selectedMediaFilter) { o, m -> o to m },
         tabDao.observeAll(),
         _tabCaches,
         combine(
@@ -110,7 +118,7 @@ class BrowseViewModel(
             savedSearchDao.observeAll(),
             historyDao.observeRecent()
         ) { saved, hist -> saved to hist.map { it.query } }
-    ) { draft, tabs, caches, (settings, compiledBlacklist, favIds), (savedSearches, recentQueries) ->
+    ) { (order, media), tabs, caches, (settings, compiledBlacklist, favIds), (savedSearches, recentQueries) ->
         val activeTab = tabs.firstOrNull { it.isActive } ?: tabs.firstOrNull()
         val cache = activeTab?.let { caches[it.id] } ?: TabFeedCache()
 
@@ -126,10 +134,8 @@ class BrowseViewModel(
         val allBlacklisted = cache.rawPosts.isNotEmpty() && visiblePosts.isEmpty()
 
         BrowseUiState(
-            searchInput = draft.query,
-            selectedOrder = draft.order,
-            selectedMediaFilter = draft.media,
-            suggestions = draft.suggestions,
+            selectedOrder = order,
+            selectedMediaFilter = media,
             tabs = tabs,
             activeTab = activeTab,
             posts = visiblePosts,
@@ -149,13 +155,6 @@ class BrowseViewModel(
     }.flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BrowseUiState())
 
-    private data class SearchDraft(
-        val query: String,
-        val order: SearchOrder,
-        val media: MediaFilter,
-        val suggestions: List<TagSuggestion>
-    )
-
     init {
         viewModelScope.launch {
             val existingTabs = tabDao.getAllSnapshot()
@@ -163,7 +162,7 @@ class BrowseViewModel(
                 openNewSearchTab(query = "", title = "Recent", isPopular = false)
             } else {
                 val active = existingTabs.firstOrNull { it.isActive } ?: existingTabs.first()
-                _searchInput.value = active.query
+                searchInput = active.query
                 loadTab(active, reset = true)
             }
         }
@@ -175,6 +174,7 @@ class BrowseViewModel(
                 lastObservedHost = settings.apiHost
                 if (prev != null && prev != settings.apiHost) {
                     _tabCaches.value = emptyMap()
+                    recentTabAccessOrder.clear()
                     val active = tabDao.getAllSnapshot().firstOrNull { it.isActive }
                     if (active != null) loadTab(active, reset = true)
                 }
@@ -183,7 +183,7 @@ class BrowseViewModel(
     }
 
     fun onSearchInputChange(newText: String) {
-        _searchInput.value = newText
+        searchInput = newText
         autocompleteJob?.cancel()
 
         val lastToken = if (newText.endsWith(" ")) "" else newText.substringAfterLast(' ').trim()
@@ -221,7 +221,7 @@ class BrowseViewModel(
     }
 
     private fun rebuildDraftWithMeta(order: SearchOrder, media: MediaFilter) {
-        val tokens = _searchInput.value
+        val tokens = searchInput
             .split(Regex("\\s+"))
             .filter { token ->
                 token.isNotBlank() &&
@@ -234,12 +234,12 @@ class BrowseViewModel(
             .toMutableList()
         if (order.metatag.isNotEmpty()) tokens.add(order.metatag)
         if (media.metatag.isNotEmpty()) tokens.add(media.metatag)
-        _searchInput.value = tokens.joinToString(" ")
+        searchInput = tokens.joinToString(" ")
     }
 
-    fun submitSearch(rawQuery: String = _searchInput.value) {
+    fun submitSearch(rawQuery: String = searchInput) {
         val cleaned = rawQuery.replace(Regex("\\s+"), " ").trim()
-        _searchInput.value = cleaned
+        searchInput = cleaned
         _suggestions.value = emptyList()
         viewModelScope.launch {
             if (cleaned.isNotEmpty()) {
@@ -284,7 +284,7 @@ class BrowseViewModel(
                     isActive = true
                 )
             )
-            _searchInput.value = query.trim()
+            searchInput = query.trim()
             val tab = BrowseTabEntity(
                 id = newId,
                 title = title,
@@ -300,7 +300,8 @@ class BrowseViewModel(
     fun selectTab(tab: BrowseTabEntity) {
         viewModelScope.launch {
             tabDao.setActive(tab.id)
-            _searchInput.value = tab.query
+            searchInput = tab.query
+            touchTabCacheLru(tab.id)
             val existing = _tabCaches.value[tab.id]
             if (existing == null || (existing.rawPosts.isEmpty() && !existing.isLoading)) {
                 loadTab(tab, reset = true)
@@ -316,6 +317,7 @@ class BrowseViewModel(
     fun closeTab(tab: BrowseTabEntity) {
         viewModelScope.launch {
             tabDao.deleteById(tab.id)
+            recentTabAccessOrder.remove(tab.id)
             _tabCaches.update { it - tab.id }
             val remaining = tabDao.getAllSnapshot()
             if (remaining.isEmpty()) {
@@ -323,7 +325,7 @@ class BrowseViewModel(
             } else if (tab.isActive) {
                 val next = remaining.first()
                 tabDao.setActive(next.id)
-                _searchInput.value = next.query
+                searchInput = next.query
                 if (_tabCaches.value[next.id]?.rawPosts.isNullOrEmpty()) {
                     loadTab(next, reset = true)
                 }
@@ -334,6 +336,7 @@ class BrowseViewModel(
     fun closeAllTabs() {
         viewModelScope.launch {
             tabDao.clearAll()
+            recentTabAccessOrder.clear()
             _tabCaches.value = emptyMap()
             openNewSearchTab(query = "", title = "Recent")
         }
@@ -414,7 +417,7 @@ class BrowseViewModel(
 
                 _tabCaches.update { map ->
                     val current = map[tab.id] ?: TabFeedCache()
-                    map + (tab.id to current.copy(
+                    val updatedMap = map + (tab.id to current.copy(
                         rawPosts = merged,
                         currentPage = nextPage,
                         lowestPostId = lowestId,
@@ -423,6 +426,7 @@ class BrowseViewModel(
                         isLoadingMore = false,
                         error = null
                     ))
+                    pruneOldTabCaches(updatedMap, activeTabId = tab.id)
                 }
 
                 // Fetch total post count asynchronously on fresh searches
@@ -513,5 +517,24 @@ class BrowseViewModel(
                 }
             }
         }
+    }
+
+    private fun touchTabCacheLru(tabId: Long) {
+        recentTabAccessOrder.remove(tabId)
+        recentTabAccessOrder.addLast(tabId)
+    }
+
+    private fun pruneOldTabCaches(
+        map: Map<Long, TabFeedCache>,
+        activeTabId: Long
+    ): Map<Long, TabFeedCache> {
+        touchTabCacheLru(activeTabId)
+        if (map.size <= MAX_CACHED_TABS) return map
+        val keepIds = recentTabAccessOrder.takeLast(MAX_CACHED_TABS).toSet() + activeTabId
+        return map.filterKeys { it in keepIds }
+    }
+
+    companion object {
+        private const val MAX_CACHED_TABS = 6
     }
 }

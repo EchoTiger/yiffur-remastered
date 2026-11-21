@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -30,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,20 +64,25 @@ import com.ugf.yiffur1.ui.components.PostFeedGrid
 @Composable
 fun CollectionScreen(
     viewModel: ViewerViewModel,
+    sessionId: Long,
+    scrollSyncTargets: Map<String, Int>,
+    onConsumeScrollSync: (String) -> Unit,
     onBack: () -> Unit,
-    onOpenPostViewer: (List<Post>, Int) -> Unit,
+    onOpenPostViewer: (List<Post>, Int, String) -> Unit,
     onAddToBrowse: (String) -> Unit,
     onCopyLink: (Post) -> Unit,
     onShareLink: (Post) -> Unit,
     onOpenUrl: (String) -> Unit
 ) {
-    val state by viewModel.collectionState.collectAsStateWithLifecycle()
+    val collectionSessions by viewModel.collectionSessions.collectAsStateWithLifecycle()
+    val state = collectionSessions[sessionId] ?: CollectionUiState(sessionId = sessionId)
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
+    val perfBudget by viewModel.performanceBudget.collectAsStateWithLifecycle()
     val localFavIds by viewModel.localFavoriteIds.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val placeholderColor = MaterialTheme.colorScheme.surfaceContainerHighest
     val placeholderPainter = remember(placeholderColor) { ColorPainter(placeholderColor) }
+    val feedKey = "collection:$sessionId"
 
     var comicStripMode by remember(state.title, state.isComicSeries) {
         mutableStateOf(state.isComicSeries)
@@ -118,7 +125,7 @@ fun CollectionScreen(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
-                        IconButton(onClick = viewModel::reverseCollectionOrder) {
+                        IconButton(onClick = { viewModel.reverseCollectionOrder(sessionId) }) {
                             Icon(Icons.Rounded.SwapVert, contentDescription = "Reverse order")
                         }
                     }
@@ -160,7 +167,19 @@ fun CollectionScreen(
 
                 comicStripMode -> {
                     // Seamless Vertical Comic / Series Reader
+                    val comicListState = rememberLazyListState()
+                    val scrollTargetPostId = scrollSyncTargets[feedKey]
+                    LaunchedEffect(scrollTargetPostId, state.posts.size) {
+                        val targetId = scrollTargetPostId ?: return@LaunchedEffect
+                        val idx = state.posts.indexOfFirst { it.id == targetId }
+                        if (idx >= 0) {
+                            val headerOffset = if (state.description.isNotBlank()) 1 else 0
+                            comicListState.scrollToItem(idx + headerOffset)
+                        }
+                        onConsumeScrollSync(feedKey)
+                    }
                     LazyColumn(
+                        state = comicListState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(bottom = 32.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -183,26 +202,26 @@ fun CollectionScreen(
                             }
                         }
                         itemsIndexed(state.posts, key = { _, p -> p.id }) { idx, post ->
-                            val allowHd = settings.hdFullscreen && perfState.budget.allowImmediateHdFullscreen
+                            val allowHd = settings.hdFullscreen && perfBudget.budget.allowImmediateHdFullscreen
                             val imageUrl = post.bestFullscreenImageUrl(highQuality = allowHd)
-                            val maxDecodePx = when (perfState.effectiveTier) {
+                            val maxDecodePx = when (perfBudget.effectiveTier) {
                                 PerformanceTier.ULTRA -> 1600
                                 PerformanceTier.BALANCED -> 1200
                                 PerformanceTier.POWER_SAVER -> 900
                                 PerformanceTier.SURVIVAL -> 720
                             }
-                            val req = remember(imageUrl, maxDecodePx, perfState.budget.enableCrossfade) {
+                            val req = remember(imageUrl, maxDecodePx, perfBudget.budget.enableCrossfade) {
                                 ImageRequest.Builder(context)
                                     .data(imageUrl)
                                     .size(maxDecodePx)
                                     .precision(Precision.INEXACT)
-                                    .crossfade(perfState.budget.enableCrossfade)
+                                    .crossfade(perfBudget.budget.enableCrossfade)
                                     .build()
                             }
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onOpenPostViewer(state.posts, idx) }
+                                    .clickable { onOpenPostViewer(state.posts, idx, feedKey) }
                             ) {
                                 AsyncImage(
                                     model = req,
@@ -254,17 +273,19 @@ fun CollectionScreen(
                         PostFeedGrid(
                             posts = state.posts,
                             settings = settings,
-                            budget = perfState.budget,
+                            budget = perfBudget.budget,
                             localFavoriteIds = localFavIds,
                             isLoadingMore = false,
                             hasMore = false,
                             onLoadMore = {},
-                            onPostClick = { idx -> onOpenPostViewer(state.posts, idx) },
+                            onPostClick = { idx -> onOpenPostViewer(state.posts, idx, feedKey) },
                             onQuickFavorite = viewModel::toggleFavorite,
                             onDownload = viewModel::downloadPost,
                             onCopyLink = onCopyLink,
                             onShareLink = onShareLink,
-                            onOpenInBrowser = { p -> onOpenUrl("https://${settings.apiHost.domain}/posts/${p.id}") }
+                            onOpenInBrowser = { p -> onOpenUrl("https://${settings.apiHost.domain}/posts/${p.id}") },
+                            scrollToPostId = scrollSyncTargets[feedKey],
+                            onScrollToPostConsumed = { onConsumeScrollSync(feedKey) }
                         )
                     }
                 }

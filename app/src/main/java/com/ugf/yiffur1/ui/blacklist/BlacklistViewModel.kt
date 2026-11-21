@@ -1,5 +1,8 @@
 package com.ugf.yiffur1.ui.blacklist
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ugf.yiffur1.data.api.ApiErrorParser
@@ -22,7 +25,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class BlacklistUiState(
-    val input: String = "",
     val selectedOperator: CompoundOperator = CompoundOperator.AND,
     val editingRuleId: Long? = null,
     val compoundSelectMode: Boolean = false,
@@ -32,25 +34,24 @@ data class BlacklistUiState(
     val isDisabledGlobally: Boolean = false,
     val isLoggedIn: Boolean = false,
     val isSyncingAccount: Boolean = false
-) {
-    val parsedTerms: List<BlacklistTerm>
-        get() = BlacklistEngine.parseTerms(input)
-
-    val liveDescription: String
-        get() = BlacklistEngine.describeRule(input)
-}
+)
 
 class BlacklistViewModel(
     private val container: AppContainer
 ) : ViewModel() {
 
     private data class EditorDraft(
-        val input: String = "",
         val selectedOperator: CompoundOperator = CompoundOperator.AND,
         val editingRuleId: Long? = null,
         val compoundSelectMode: Boolean = false,
         val selectedRuleIds: Set<Long> = emptySet()
     )
+
+    /**
+     * Synchronous Compose Snapshot input state preventing async StateFlow cursor displacement.
+     */
+    var inputText by mutableStateOf("")
+        private set
 
     private val dao = container.database.blacklistDao()
     private val _draft = MutableStateFlow(EditorDraft())
@@ -70,7 +71,6 @@ class BlacklistViewModel(
         combine(container.credentialStore.credentialsFlow, _isSyncing) { creds, syncing -> (creds != null) to syncing }
     ) { draft, suggestions, rules, settings, (loggedIn, syncing) ->
         BlacklistUiState(
-            input = draft.input,
             selectedOperator = draft.selectedOperator,
             editingRuleId = draft.editingRuleId,
             compoundSelectMode = draft.compoundSelectMode,
@@ -84,7 +84,7 @@ class BlacklistViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BlacklistUiState())
 
     fun onInputChange(newText: String) {
-        _draft.update { it.copy(input = newText) }
+        inputText = newText
         acJob?.cancel()
         val lastToken = if (newText.endsWith(" ")) "" else newText.substringAfterLast(' ').trim()
         val clean = lastToken.removePrefix("-").removePrefix("~")
@@ -113,24 +113,22 @@ class BlacklistViewModel(
         val cleaned = rawToken.trim()
         if (cleaned.isEmpty()) return
 
-        _draft.update { cur ->
-            val terms = BlacklistEngine.parseTerms(cur.input).toMutableList()
-            val explicitOp = when {
-                cleaned.startsWith("-") && cleaned.length > 1 -> CompoundOperator.NOT
-                cleaned.startsWith("~") && cleaned.length > 1 -> CompoundOperator.OR
-                else -> overrideOperator ?: cur.selectedOperator
-            }
-            val bare = cleaned.removePrefix("-").removePrefix("~")
-            val newTerm = BlacklistTerm(explicitOp, bare)
-            // Replace if same bare term already exists; otherwise append
-            val existingIdx = terms.indexOfFirst { it.term.equals(bare, ignoreCase = true) }
-            if (existingIdx >= 0) {
-                terms[existingIdx] = newTerm
-            } else {
-                terms.add(newTerm)
-            }
-            cur.copy(input = BlacklistEngine.formatTerms(terms) + " ")
+        val currentOp = _draft.value.selectedOperator
+        val terms = BlacklistEngine.parseTerms(inputText).toMutableList()
+        val explicitOp = when {
+            cleaned.startsWith("-") && cleaned.length > 1 -> CompoundOperator.NOT
+            cleaned.startsWith("~") && cleaned.length > 1 -> CompoundOperator.OR
+            else -> overrideOperator ?: currentOp
         }
+        val bare = cleaned.removePrefix("-").removePrefix("~")
+        val newTerm = BlacklistTerm(explicitOp, bare)
+        val existingIdx = terms.indexOfFirst { it.term.equals(bare, ignoreCase = true) }
+        if (existingIdx >= 0) {
+            terms[existingIdx] = newTerm
+        } else {
+            terms.add(newTerm)
+        }
+        inputText = BlacklistEngine.formatTerms(terms) + " "
         _suggestions.value = emptyList()
     }
 
@@ -138,48 +136,42 @@ class BlacklistViewModel(
      * Replaces the trailing partial word with an autocompleted tag using the selected operator.
      */
     fun applyAutocompleteSuggestion(tagName: String) {
-        _draft.update { cur ->
-            val raw = cur.input
-            val lastSpace = raw.lastIndexOf(' ')
-            val prefix = if (lastSpace >= 0) raw.substring(0, lastSpace + 1) else ""
-            val trailing = if (lastSpace >= 0) raw.substring(lastSpace + 1) else raw
-            val opPrefix = when {
-                trailing.startsWith("-") -> "-"
-                trailing.startsWith("~") -> "~"
-                else -> cur.selectedOperator.prefix
-            }
-            cur.copy(input = "$prefix$opPrefix$tagName ")
+        val raw = inputText
+        val lastSpace = raw.lastIndexOf(' ')
+        val prefix = if (lastSpace >= 0) raw.substring(0, lastSpace + 1) else ""
+        val trailing = if (lastSpace >= 0) raw.substring(lastSpace + 1) else raw
+        val opPrefix = when {
+            trailing.startsWith("-") -> "-"
+            trailing.startsWith("~") -> "~"
+            else -> _draft.value.selectedOperator.prefix
         }
+        inputText = "$prefix$opPrefix$tagName "
         _suggestions.value = emptyList()
     }
 
     fun cycleTermOperatorAt(index: Int) {
-        _draft.update { cur ->
-            val terms = BlacklistEngine.parseTerms(cur.input).toMutableList()
-            if (index !in terms.indices) return@update cur
-            val nextOp = when (terms[index].operator) {
-                CompoundOperator.AND -> CompoundOperator.NOT
-                CompoundOperator.NOT -> CompoundOperator.OR
-                CompoundOperator.OR -> CompoundOperator.AND
-            }
-            terms[index] = terms[index].copy(operator = nextOp)
-            cur.copy(input = BlacklistEngine.formatTerms(terms))
+        val terms = BlacklistEngine.parseTerms(inputText).toMutableList()
+        if (index !in terms.indices) return
+        val nextOp = when (terms[index].operator) {
+            CompoundOperator.AND -> CompoundOperator.NOT
+            CompoundOperator.NOT -> CompoundOperator.OR
+            CompoundOperator.OR -> CompoundOperator.AND
         }
+        terms[index] = terms[index].copy(operator = nextOp)
+        inputText = BlacklistEngine.formatTerms(terms)
     }
 
     fun removeTermAt(index: Int) {
-        _draft.update { cur ->
-            val terms = BlacklistEngine.parseTerms(cur.input).toMutableList()
-            if (index !in terms.indices) return@update cur
-            terms.removeAt(index)
-            cur.copy(input = BlacklistEngine.formatTerms(terms))
-        }
+        val terms = BlacklistEngine.parseTerms(inputText).toMutableList()
+        if (index !in terms.indices) return
+        terms.removeAt(index)
+        inputText = BlacklistEngine.formatTerms(terms)
     }
 
     fun startEditingRule(rule: BlacklistRuleEntity) {
+        inputText = rule.rule
         _draft.update {
             it.copy(
-                input = rule.rule,
                 editingRuleId = rule.id,
                 compoundSelectMode = false,
                 selectedRuleIds = emptySet()
@@ -189,13 +181,14 @@ class BlacklistViewModel(
     }
 
     fun cancelEditing() {
-        _draft.update { it.copy(input = "", editingRuleId = null) }
+        inputText = ""
+        _draft.update { it.copy(editingRuleId = null) }
         _suggestions.value = emptyList()
     }
 
     fun saveRule() {
         val draft = _draft.value
-        val lines = BlacklistEngine.parseLines(draft.input)
+        val lines = BlacklistEngine.parseLines(inputText)
         if (lines.isEmpty()) {
             _events.tryEmit("Enter a tag or compound rule (e.g. gore or young -rating:s)")
             return
@@ -207,7 +200,8 @@ class BlacklistViewModel(
                 val formatted = BlacklistEngine.formatTerms(BlacklistEngine.parseTerms(lines.first()))
                 if (formatted.isNotBlank()) {
                     dao.updateRuleText(editId, formatted)
-                    _draft.update { it.copy(input = "", editingRuleId = null) }
+                    inputText = ""
+                    _draft.update { it.copy(editingRuleId = null) }
                     _suggestions.value = emptyList()
                     _events.tryEmit("Updated blacklist rule")
                 }
@@ -222,7 +216,8 @@ class BlacklistViewModel(
                     _events.tryEmit("Rule already in blacklist")
                 } else {
                     dao.insertAll(normalized.map { BlacklistRuleEntity(rule = it) })
-                    _draft.update { it.copy(input = "", editingRuleId = null) }
+                    inputText = ""
+                    _draft.update { it.copy(editingRuleId = null) }
                     _suggestions.value = emptyList()
                     val kind = if (normalized.size == 1 && BlacklistEngine.isCompoundRule(normalized.first())) {
                         "Added compound blacklist rule"
@@ -297,7 +292,8 @@ class BlacklistViewModel(
         viewModelScope.launch {
             dao.deleteById(rule.id)
             if (_draft.value.editingRuleId == rule.id) {
-                _draft.update { it.copy(input = "", editingRuleId = null) }
+                inputText = ""
+                _draft.update { it.copy(editingRuleId = null) }
             }
         }
     }
@@ -339,6 +335,7 @@ class BlacklistViewModel(
     fun clearAll() {
         viewModelScope.launch {
             dao.clearAll()
+            inputText = ""
             _draft.update { it.copy(editingRuleId = null, compoundSelectMode = false, selectedRuleIds = emptySet()) }
             _events.tryEmit("Blacklist cleared")
         }

@@ -55,7 +55,9 @@ import com.ugf.yiffur1.ui.components.PostFeedGrid
 @Composable
 fun FavoritesScreen(
     viewModel: FavoritesViewModel,
-    onOpenPostViewer: (List<Post>, Int) -> Unit,
+    scrollSyncTargets: Map<String, Int>,
+    onConsumeScrollSync: (String) -> Unit,
+    onOpenPostViewer: (List<Post>, Int, String) -> Unit,
     onGoToSettingsLogin: () -> Unit,
     onCopyLink: (Post) -> Unit,
     onShareLink: (Post) -> Unit,
@@ -63,7 +65,8 @@ fun FavoritesScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
+    val perfBudget by viewModel.performanceBudget.collectAsStateWithLifecycle()
+    val filterQuery = viewModel.filterQuery
     val snackbarHostState = remember { SnackbarHostState() }
     val focusManager = LocalFocusManager.current
 
@@ -124,7 +127,7 @@ fun FavoritesScreen(
             // Filter / Search Box
             if (state.source == FavoritesSource.LOCAL || state.isLoggedIn) {
                 OutlinedTextField(
-                    value = state.filterQuery,
+                    value = filterQuery,
                     onValueChange = viewModel::onFilterQueryChange,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -141,7 +144,7 @@ fun FavoritesScreen(
                     leadingIcon = { Icon(Icons.Rounded.Search, null) },
                     trailingIcon = {
                         Row {
-                            if (state.filterQuery.isNotEmpty()) {
+                            if (filterQuery.isNotEmpty()) {
                                 IconButton(onClick = {
                                     viewModel.onFilterQueryChange("")
                                     if (state.source == FavoritesSource.REMOTE_E621) viewModel.submitRemoteFilter()
@@ -222,24 +225,35 @@ fun FavoritesScreen(
                                 modifier = Modifier.size(48.dp)
                             )
                             Text(
-                                text = if (state.filterQuery.isNotBlank()) "No matching favorites" else "No favorites yet",
+                                text = when {
+                                    filterQuery.isNotBlank() -> "No matching favorites"
+                                    state.source == FavoritesSource.REMOTE_E621 -> "No e621 favorites found"
+                                    else -> "No local favorites yet"
+                                },
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                text = if (state.filterQuery.isNotBlank()) {
-                                    "Try clearing or simplifying your filter."
-                                } else {
-                                    "Long-press any post in Browse or tap the heart in the viewer to save it here."
+                                text = when {
+                                    filterQuery.isNotBlank() -> "Try clearing or simplifying your filter."
+                                    state.source == FavoritesSource.REMOTE_E621 ->
+                                        "No visible e621 favorites matched your active host (${state.settings.apiHost.domain}), rating filters, or blacklist."
+                                    else -> "Long-press any post in Browse or tap the heart in the viewer to save it here."
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
                             )
+                            if (state.source == FavoritesSource.REMOTE_E621) {
+                                Button(onClick = viewModel::refreshRemote) {
+                                    Text("Refresh e621 Favorites")
+                                }
+                            }
                         }
                     }
                 }
 
                 else -> {
+                    val feedKey = "favorites:${state.source.name}"
                     PullToRefreshBox(
                         isRefreshing = state.isLoading && state.posts.isNotEmpty(),
                         onRefresh = {
@@ -250,17 +264,19 @@ fun FavoritesScreen(
                         PostFeedGrid(
                             posts = state.posts,
                             settings = state.settings,
-                            budget = perfState.budget,
+                            budget = perfBudget.budget,
                             localFavoriteIds = state.localFavoriteIds,
                             isLoadingMore = state.isLoadingMore,
                             hasMore = state.hasMoreRemote,
                             onLoadMore = viewModel::loadNextRemotePage,
-                            onPostClick = { idx -> onOpenPostViewer(state.posts, idx) },
+                            onPostClick = { idx -> onOpenPostViewer(state.posts, idx, feedKey) },
                             onQuickFavorite = viewModel::quickToggleFavorite,
                             onDownload = viewModel::downloadPost,
                             onCopyLink = onCopyLink,
                             onShareLink = onShareLink,
                             onOpenInBrowser = onOpenInBrowser,
+                            scrollToPostId = scrollSyncTargets[feedKey],
+                            onScrollToPostConsumed = { onConsumeScrollSync(feedKey) },
                             contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 24.dp)
                         )
                     }

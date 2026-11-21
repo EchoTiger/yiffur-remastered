@@ -128,6 +128,7 @@ import com.ugf.yiffur1.util.Formatters
 @Composable
 fun PostViewerScreen(
     viewModel: ViewerViewModel,
+    sessionId: Long,
     videoDataSourceFactory: DataSource.Factory,
     onBack: () -> Unit,
     onSearchTag: (String) -> Unit,
@@ -138,9 +139,11 @@ fun PostViewerScreen(
     onShareLink: (Post) -> Unit,
     onOpenUrl: (String) -> Unit
 ) {
-    val state by viewModel.viewerState.collectAsStateWithLifecycle()
+    val sessions by viewModel.viewerSessions.collectAsStateWithLifecycle()
+    val session = sessions[sessionId]
+    val metadata by viewModel.metadataState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val perfState by viewModel.performanceState.collectAsStateWithLifecycle()
+    val perfBudget by viewModel.performanceBudget.collectAsStateWithLifecycle()
     val localFavIds by viewModel.localFavoriteIds.collectAsStateWithLifecycle()
     val credentials by viewModel.credentials.collectAsStateWithLifecycle()
     val blacklistedTags by viewModel.blacklistedTagStrings.collectAsStateWithLifecycle()
@@ -153,8 +156,8 @@ fun PostViewerScreen(
     var privacyCurtainOn by remember { mutableStateOf(false) }
     var isCurrentZoomed by remember { mutableStateOf(false) }
     var showNotes by remember { mutableStateOf(true) }
-    var forceFullRes by remember(settings.hdFullscreen, perfState.budget.allowImmediateHdFullscreen) {
-        mutableStateOf(settings.hdFullscreen && perfState.budget.allowImmediateHdFullscreen)
+    var forceFullRes by remember(settings.hdFullscreen, perfBudget.budget.allowImmediateHdFullscreen) {
+        mutableStateOf(settings.hdFullscreen && perfBudget.budget.allowImmediateHdFullscreen)
     }
 
     var showDetailsSheet by remember { mutableStateOf(false) }
@@ -201,31 +204,42 @@ fun PostViewerScreen(
             .background(Color.Black)
     ) {
         when {
-            state.isLoadingSinglePost -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
-            }
-
-            state.error != null && state.posts.isEmpty() -> {
+            session == null -> {
                 Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(state.error.orEmpty(), color = MaterialTheme.colorScheme.error)
+                        Text("Viewer session closed", color = Color.White)
                         Button(onClick = onBack) { Text("Back") }
                     }
                 }
             }
 
-            state.posts.isNotEmpty() -> {
+            session.isLoadingSinglePost -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            session.error != null && session.posts.isEmpty() -> {
+                Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(session.error, color = MaterialTheme.colorScheme.error)
+                        Button(onClick = onBack) { Text("Back") }
+                    }
+                }
+            }
+
+            session.posts.isNotEmpty() -> {
                 val pagerState = rememberPagerState(
-                    initialPage = state.initialIndex.coerceIn(0, state.posts.lastIndex),
-                    pageCount = { state.posts.size }
+                    initialPage = session.currentIndex.coerceIn(0, session.posts.lastIndex),
+                    pageCount = { session.posts.size }
                 )
-                val currentPost = state.posts[pagerState.currentPage]
+                val safePage = pagerState.currentPage.coerceIn(0, session.posts.lastIndex)
+                val currentPost = session.posts[safePage]
                 val isFav = currentPost.isFavorited || currentPost.id in localFavIds
 
-                LaunchedEffect(currentPost.id) {
+                LaunchedEffect(safePage, currentPost.id) {
                     isCurrentZoomed = false
+                    viewModel.reportViewerPosition(sessionId, safePage, currentPost.id)
                     viewModel.markPostSeen(currentPost.id)
                     viewModel.loadNotesIfNeeded(currentPost)
                     viewModel.loadPostPoolsIfNeeded(currentPost)
@@ -242,18 +256,19 @@ fun PostViewerScreen(
                     HorizontalPager(
                         state = pagerState,
                         userScrollEnabled = !isCurrentZoomed,
-                        beyondViewportPageCount = perfState.budget.pagerOffscreenPages,
+                        beyondViewportPageCount = perfBudget.budget.pagerOffscreenPages,
                         modifier = Modifier.fillMaxSize()
                     ) { page ->
-                        val post = state.posts[page]
-                        val isActive = page == pagerState.currentPage
+                        val post = session.posts.getOrNull(page) ?: return@HorizontalPager
+                        val isActive = page == safePage
 
                         when (post.mediaType) {
                             MediaType.VIDEO -> {
                                 VideoPlayerView(
                                     post = post,
                                     videoDataSourceFactory = videoDataSourceFactory,
-                                    perfState = perfState,
+                                    budget = perfBudget.budget,
+                                    hardware = perfBudget.hardware,
                                     defaultQuality = settings.videoQuality,
                                     defaultMuted = settings.muteVideosByDefault,
                                     isActivePage = isActive && !privacyCurtainOn,
@@ -293,7 +308,7 @@ fun PostViewerScreen(
                                 val targetUrl = post.bestFullscreenImageUrl(highQuality = forceFullRes)
                                 val placeholderUrl = post.bestAdaptiveThumbnailUrl(
                                     hdSetting = settings.hdThumbnails,
-                                    budget = perfState.budget,
+                                    budget = perfBudget.budget,
                                     isLargeCard = false
                                 )
                                 ZoomablePostImage(
@@ -304,9 +319,10 @@ fun PostViewerScreen(
                                     fileSizeBytes = post.fileSize,
                                     imageWidth = post.width,
                                     imageHeight = post.height,
-                                    notes = state.notesByPost[post.id].orEmpty(),
+                                    notes = metadata.notesByPost[post.id].orEmpty(),
                                     showNotes = showNotes,
-                                    budget = perfState.budget,
+                                    isActivePage = isActive && !privacyCurtainOn,
+                                    budget = perfBudget.budget,
                                     onSingleTap = { chromeVisible = !chromeVisible },
                                     onZoomStateChanged = { zoomed ->
                                         if (isActive) isCurrentZoomed = zoomed
@@ -388,7 +404,7 @@ fun PostViewerScreen(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Text(
-                                            text = "${pagerState.currentPage + 1} / ${state.posts.size}",
+                                            text = "${safePage + 1} / ${session.posts.size}",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = Color.White.copy(alpha = 0.78f)
                                         )
@@ -582,7 +598,7 @@ fun PostViewerScreen(
                                                 }
                                             )
                                         }
-                                        val loadedPools = state.poolsByPost[currentPost.id].orEmpty()
+                                        val loadedPools = metadata.poolsByPost[currentPost.id].orEmpty()
                                         if (loadedPools.isNotEmpty()) {
                                             loadedPools.forEach { pool ->
                                                 DropdownMenuItem(
@@ -629,8 +645,8 @@ fun PostViewerScreen(
                 // Details, Tags & Comments Bottom Sheet
                 if (showDetailsSheet) {
                     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-                    val comments = state.commentsByPost[currentPost.id].orEmpty()
-                    val loadingComments = currentPost.id in state.loadingCommentsFor
+                    val comments = metadata.commentsByPost[currentPost.id].orEmpty()
+                    val loadingComments = currentPost.id in metadata.loadingCommentsFor
                     var commentDraft by remember(currentPost.id) { mutableStateOf("") }
                     var doNotBump by remember(currentPost.id) { mutableStateOf(false) }
 
@@ -680,7 +696,7 @@ fun PostViewerScreen(
                             }
 
                             // Pools & Family Quick Pills
-                            val loadedPools = state.poolsByPost[currentPost.id].orEmpty()
+                            val loadedPools = metadata.poolsByPost[currentPost.id].orEmpty()
                             if (loadedPools.isNotEmpty() || currentPost.pools.isNotEmpty() || currentPost.parentId != null || currentPost.hasChildren) {
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -855,10 +871,10 @@ fun PostViewerScreen(
                                                     viewModel.postComment(currentPost, body, doNotBump)
                                                     commentDraft = ""
                                                 },
-                                                enabled = commentDraft.isNotBlank() && !state.isPostingComment,
+                                                enabled = commentDraft.isNotBlank() && !metadata.isPostingComment,
                                                 shape = RoundedCornerShape(12.dp)
                                             ) {
-                                                if (state.isPostingComment) {
+                                                if (metadata.isPostingComment) {
                                                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                                 } else {
                                                     Icon(Icons.AutoMirrored.Rounded.Send, null, modifier = Modifier.size(16.dp))
@@ -977,11 +993,11 @@ fun PostViewerScreen(
         }
 
         // In-App Wiki Sheet
-        state.activeWikiTitle?.let { wikiTitle ->
+        metadata.activeWikiTitle?.let { wikiTitle ->
             WikiViewerSheet(
                 title = wikiTitle,
-                wikiPage = state.activeWikiPage,
-                isLoading = state.isLoadingWiki,
+                wikiPage = metadata.activeWikiPage,
+                isLoading = metadata.isLoadingWiki,
                 apiHost = settings.apiHost,
                 onSearchTag = {
                     showDetailsSheet = false
@@ -1002,11 +1018,11 @@ fun PostViewerScreen(
         }
 
         // In-App Artist Profile Sheet
-        state.activeArtistName?.let { artistName ->
+        metadata.activeArtistName?.let { artistName ->
             ArtistInfoSheet(
                 artistName = artistName,
-                artistInfo = state.activeArtistInfo,
-                isLoading = state.isLoadingArtist,
+                artistInfo = metadata.activeArtistInfo,
+                isLoading = metadata.isLoadingArtist,
                 onSearchArtist = {
                     showDetailsSheet = false
                     onSearchTag(it)

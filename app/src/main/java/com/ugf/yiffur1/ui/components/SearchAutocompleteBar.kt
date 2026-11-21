@@ -44,8 +44,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ugf.yiffur1.domain.model.MediaFilter
@@ -73,11 +75,24 @@ fun SearchAutocompleteBar(
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+    // Keep TextFieldValue synchronously in Compose state so fast IME typing never loses cursor position,
+    // while programmatic query updates (autocomplete taps, tab switches, filter chips) anchor cursor cleanly at the end.
+    var textFieldValue by remember {
+        mutableStateOf(TextFieldValue(text = query, selection = TextRange(query.length)))
+    }
+    if (textFieldValue.text != query) {
+        textFieldValue = TextFieldValue(text = query, selection = TextRange(query.length))
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         OutlinedTextField(
-            value = query,
-            onValueChange = onQueryChange,
+            value = textFieldValue,
+            onValueChange = { updated ->
+                textFieldValue = updated
+                if (updated.text != query) {
+                    onQueryChange(updated.text)
+                }
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .onFocusChanged { state ->
@@ -101,8 +116,11 @@ fun SearchAutocompleteBar(
             },
             trailingIcon = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = { onQueryChange("") }) {
+                    if (textFieldValue.text.isNotEmpty()) {
+                        IconButton(onClick = {
+                            textFieldValue = TextFieldValue(text = "", selection = TextRange.Zero)
+                            onQueryChange("")
+                        }) {
                             Icon(Icons.Rounded.Clear, contentDescription = "Clear", modifier = Modifier.size(20.dp))
                         }
                     }
@@ -128,7 +146,7 @@ fun SearchAutocompleteBar(
                 onSearch = {
                     focusManager.clearFocus()
                     onClearSuggestions()
-                    onSubmit(query)
+                    onSubmit(textFieldValue.text)
                 }
             )
         )
@@ -151,7 +169,8 @@ fun SearchAutocompleteBar(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    val updated = applyAutocompleteToken(query, suggestion.name)
+                                    val updated = applyAutocompleteToken(textFieldValue.text, suggestion.name)
+                                    textFieldValue = TextFieldValue(text = updated, selection = TextRange(updated.length))
                                     onQueryChange(updated)
                                     onClearSuggestions()
                                 }
@@ -193,7 +212,7 @@ fun SearchAutocompleteBar(
                     }
                 }
             }
-        } else if (isFocused && query.isBlank() && recentQueries.isNotEmpty()) {
+        } else if (isFocused && textFieldValue.text.isBlank() && recentQueries.isNotEmpty()) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -210,6 +229,7 @@ fun SearchAutocompleteBar(
                                 .fillMaxWidth()
                                 .clickable {
                                     focusManager.clearFocus()
+                                    textFieldValue = TextFieldValue(text = recent, selection = TextRange(recent.length))
                                     onQueryChange(recent)
                                     onSubmit(recent)
                                 }

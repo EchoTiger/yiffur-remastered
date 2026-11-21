@@ -1,4 +1,4 @@
-# Yiffur Remastered (v2.2.0)
+# Yiffur Remastered (v2.2.1)
 
 A ground-up 2026 Kotlin + Jetpack Compose rewrite of **Yiffur**, the native Android client for [e926.net](https://e926.net) and [e621.net](https://e621.net).
 Engineered for ultra-low CPU load, seamless background adaptation on constrained/older devices (Android 7.0+ / API 24+), personalized on-device discovery, visual tag blacklist compounding, and gold-standard media rendering on modern flagships.
@@ -6,6 +6,14 @@ Engineered for ultra-low CPU load, seamless background adaptation on constrained
 This is a ground-up remaster of the old Yiffur project from 2019.
 
 ## Highlights
+
+### Community Feedback & Stability Polish (v2.2.1)
+- **Zero-Lag Text Inputs**: Synchronous Compose Snapshot state + explicit `TextFieldValue` cursor anchoring across Browse, Favorites, Explore, and Blacklist eliminates IME cursor jumping and removes unnecessary per-keystroke feed filtering.
+- **Isolated Nested Viewer & Collection Sessions**: Per-route session stack (`viewer/{sessionId}`, `collection/{sessionId}`) eliminates crashes when backing out of Parent/Children or Pool collections and restores your exact previous feed page.
+- **Gallery Scroll Position Sync**: Swiping through posts in the fullscreen viewer automatically scrolls Browse, Explore, Favorites, and Pool/Comic grids to the last post you viewed when pressing Back.
+- **3-Button Navigation Clearance**: Video playback controls and interactive Note cards respect Android system navigation-bar insets so Play/Pause never overlaps Like/Dislike buttons.
+- **Account-Only Favorites Auto-Load**: Disabling Local Yiffur Favorites now automatically switches to and loads your e621 Account favorites on cold startup, sign-in, and host switch.
+- **Deep Session CPU & Memory Hardening**: Single active `ExoPlayer` lifecycle (zero offscreen decoders), zero offscreen GIF/Telephoto tile decoding, uncached RAM policy for large animated GIF drawables, decoupled per-swipe seen-post tracking, deduplicated performance budget recompositions, and LRU-bounded session caches.
 
 ### Personalized "For You" Discovery Feed & Tag Blacklist Compounding (v2.2.0)
 - **Explore → "For You" Feed (`ForYouRecommendationEngine`)**: 100% on-device personalized discovery feed synthesized from your local/account favorites, saved searches, search history, and viewed-post signals (Room schema v2 with lossless `MIGRATION_1_2`). Switch between **Balanced Mix**, **Unseen Only**, and **Wildcards**, tap live taste chips to focus, tune/mute preference tags without globally blacklisting them, or long-press any post to mark **"Less like this"**.
@@ -27,7 +35,7 @@ This is a ground-up remaster of the old Yiffur project from 2019.
 ### November 2026 e621 API v2 & Complete Feature Set
 - **November 2026 e621 API v2 Compliant**: `mode=extended` across posts/popular/favorites, all 9 tag categories, WebP previews/samples with JPG fallback, `files.video` multi-stream variants, HTTP Basic Auth strictly on `.json` API endpoints, 2 req/sec rate limiter + exponential backoff on `429`/`503`, and live `/users/me.json` sync.
 - **Browse, Explore, Viewer & Comic Reader**: Persistent multi-tab search sessions, live `/tags/autocomplete.json`, cursor (`b<id>`) & page-jump (1–750) pagination, Popular (Day/Week/Month + date stepping), Pools & vertical Comic Strip Reader, Post Sets, Random Post roulette, interactive e621 Notes, native DText renderer, Comments, Tag Builder, Wiki/Artist sheets, Privacy Shield curtain, and compound Blacklist engine.
-- **Seamless Legacy v1.x Migration**: Automatic one-time migration from `YiffurUserSettings` SharedPreferences on in-place upgrades (`versionCode = 20200`, strictly higher than both legacy `v1.001` code `2` and `v1.303` code `303`), plus JSON Backup Import supporting **both** Yiffur v2 backups and legacy Yiffur v1 exports.
+- **Seamless Legacy v1.x Migration**: Automatic one-time migration from `YiffurUserSettings` SharedPreferences on same-key in-place upgrades (`versionCode = 20201`), plus JSON Backup Import supporting **both** Yiffur v2 backups and legacy Yiffur v1 exports.
 
 ## Build & Signing
 

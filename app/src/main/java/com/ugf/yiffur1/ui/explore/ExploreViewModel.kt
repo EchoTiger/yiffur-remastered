@@ -1,5 +1,8 @@
 package com.ugf.yiffur1.ui.explore
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ugf.yiffur1.data.api.ApiErrorParser
@@ -59,13 +62,11 @@ data class ExploreUiState(
     val isLoadingPopular: Boolean = false,
     val popularError: String? = null,
     // Pools
-    val poolQuery: String = "",
     val poolCategoryFilter: String? = null, // null = all, "series", "collection"
     val pools: List<Pool> = emptyList(),
     val isLoadingPools: Boolean = false,
     val poolsError: String? = null,
     // Sets
-    val setQuery: String = "",
     val postSets: List<PostSet> = emptyList(),
     val isLoadingSets: Boolean = false,
     val setsError: String? = null,
@@ -93,13 +94,11 @@ class ExploreViewModel(
         val rawPopularPosts: List<Post> = emptyList(),
         val isLoadingPopular: Boolean = false,
         val popularError: String? = null,
-        val poolQuery: String = "",
         val poolCategoryFilter: String? = null,
         val pools: List<Pool> = emptyList(),
         val poolsPage: Int = 1,
         val isLoadingPools: Boolean = false,
         val poolsError: String? = null,
-        val setQuery: String = "",
         val postSets: List<PostSet> = emptyList(),
         val setsPage: Int = 1,
         val isLoadingSets: Boolean = false,
@@ -109,9 +108,16 @@ class ExploreViewModel(
 
     private data class TasteBundle(
         val profile: TasteProfile,
-        val mutedTags: List<String>,
-        val seenCount: Int
+        val mutedTags: List<String>
     )
+
+    /**
+     * Synchronous Compose Snapshot text state for Pool/Set searches so IME typing never suffers cursor jump.
+     */
+    var poolQuery by mutableStateOf("")
+        private set
+    var setQuery by mutableStateOf("")
+        private set
 
     private val internal = MutableStateFlow(InternalState())
     private val remoteFavCache = MutableStateFlow<List<Post>>(emptyList())
@@ -120,12 +126,14 @@ class ExploreViewModel(
     private val _events = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val events = _events.asSharedFlow()
 
-    val performanceState = container.performanceEngine.state
+    val performanceBudget = container.performanceEngine.budgetState
 
     private val enabledBlacklistRulesFlow = container.database.blacklistDao().observeEnabled()
     private val compiledBlacklist = enabledBlacklistRulesFlow
         .map { rules -> BlacklistEngine.compile(rules.map { it.rule }) }
 
+    // Decoupled from seenPostDao().observeRecent() so swiping through posts in the viewer
+    // NEVER rebuilds the entire taste profile or re-filters feeds on every single swipe!
     private val tasteBundleFlow = combine(
         container.favoritesRepository.localFavoritesFlow,
         remoteFavCache,
@@ -137,9 +145,8 @@ class ExploreViewModel(
             container.database.mutedTasteTagDao().observeAll(),
             enabledBlacklistRulesFlow,
             remoteFavTagsRaw
-        ) { muted, blRules, favTags -> Triple(muted.map { it.tag }, blRules, favTags) },
-        container.database.seenPostDao().observeRecent()
-    ) { localFavs, remoteFavs, (savedQueries, historyQueries), (mutedTags, blRules, favTagsRaw), seenList ->
+        ) { muted, blRules, favTags -> Triple(muted.map { it.tag }, blRules, favTags) }
+    ) { localFavs, remoteFavs, (savedQueries, historyQueries), (mutedTags, blRules, favTagsRaw) ->
         val singleBlacklisted = blRules
             .map { it.rule.trim() }
             .filter { !it.contains(' ') && !it.contains(':') && !it.startsWith("-") && !it.startsWith("~") }
@@ -157,20 +164,23 @@ class ExploreViewModel(
         )
         TasteBundle(
             profile = profile,
-            mutedTags = mutedTags,
-            seenCount = seenList.size
+            mutedTags = mutedTags
         )
     }.flowOn(Dispatchers.Default)
 
     private var lastHost: ApiHost? = null
+    private var hasInitializedForYou = false
 
     val uiState: StateFlow<ExploreUiState> = combine(
         internal,
         tasteBundleFlow,
-        container.settingsRepository.settingsFlow,
-        compiledBlacklist,
-        container.favoritesRepository.localFavoriteIdsFlow
-    ) { state, taste, settings, blacklist, favIds ->
+        container.database.seenPostDao().observeCount(),
+        combine(
+            container.settingsRepository.settingsFlow,
+            compiledBlacklist,
+            container.favoritesRepository.localFavoriteIdsFlow
+        ) { settings, bl, favIds -> Triple(settings, bl, favIds) }
+    ) { state, taste, seenCount, (settings, blacklist, favIds) ->
         val visibleForYou = state.rawForYouPosts.filter { post ->
             !post.isHiddenOrDeleted &&
                 settings.allowsRating(post.rating) &&
@@ -191,18 +201,16 @@ class ExploreViewModel(
             isLoadingForYou = state.isLoadingForYou,
             isLoadingMoreForYou = state.isLoadingMoreForYou,
             forYouError = state.forYouError,
-            seenPostsCount = taste.seenCount,
+            seenPostsCount = seenCount,
             popularScale = state.popularScale,
             popularDate = state.popularDate,
             popularPosts = visiblePopular,
             isLoadingPopular = state.isLoadingPopular,
             popularError = state.popularError,
-            poolQuery = state.poolQuery,
             poolCategoryFilter = state.poolCategoryFilter,
             pools = state.pools,
             isLoadingPools = state.isLoadingPools,
             poolsError = state.poolsError,
-            setQuery = state.setQuery,
             postSets = state.postSets,
             isLoadingSets = state.isLoadingSets,
             setsError = state.setsError,
@@ -215,19 +223,30 @@ class ExploreViewModel(
 
     init {
         viewModelScope.launch {
-            warmRemoteTasteSignalsIfLoggedIn()
-            loadForYou(reset = true)
-        }
-        viewModelScope.launch {
             container.settingsRepository.settingsFlow.collect { settings ->
                 val prev = lastHost
                 lastHost = settings.apiHost
                 if (prev != null && prev != settings.apiHost) {
-                    loadForYou(reset = true)
+                    if (hasInitializedForYou || internal.value.rawForYouPosts.isNotEmpty()) loadForYou(reset = true)
                     if (internal.value.rawPopularPosts.isNotEmpty()) loadPopular()
                     if (internal.value.pools.isNotEmpty()) loadPools(reset = true)
                     if (internal.value.postSets.isNotEmpty()) loadPostSets(reset = true)
                 }
+            }
+        }
+    }
+
+    /**
+     * Lazy entry point triggered when the user visits the Explore tab so cold startup on Browse
+     * does not fire extra recommendation queries or allocate unused post lists.
+     */
+    fun ensureInitialized() {
+        if (hasInitializedForYou) return
+        hasInitializedForYou = true
+        viewModelScope.launch {
+            warmRemoteTasteSignalsIfLoggedIn()
+            if (internal.value.rawForYouPosts.isEmpty() && !internal.value.isLoadingForYou) {
+                loadForYou(reset = true)
             }
         }
     }
@@ -458,7 +477,7 @@ class ExploreViewModel(
     }
 
     fun onPoolQueryChange(query: String) {
-        internal.update { it.copy(poolQuery = query) }
+        poolQuery = query
     }
 
     fun selectPoolCategory(category: String?) {
@@ -471,6 +490,7 @@ class ExploreViewModel(
             val snap = internal.value
             if (snap.isLoadingPools) return@launch
             val page = if (reset) 1 else snap.poolsPage + 1
+            val activePoolQuery = poolQuery
             internal.update {
                 it.copy(
                     isLoadingPools = true,
@@ -480,7 +500,7 @@ class ExploreViewModel(
             }
             runCatching {
                 container.postRepository.getPools(
-                    nameQuery = snap.poolQuery,
+                    nameQuery = activePoolQuery,
                     category = snap.poolCategoryFilter,
                     page = page
                 )
@@ -496,7 +516,7 @@ class ExploreViewModel(
     }
 
     fun onSetQueryChange(query: String) {
-        internal.update { it.copy(setQuery = query) }
+        setQuery = query
     }
 
     fun loadPostSets(reset: Boolean) {
@@ -504,6 +524,7 @@ class ExploreViewModel(
             val snap = internal.value
             if (snap.isLoadingSets) return@launch
             val page = if (reset) 1 else snap.setsPage + 1
+            val activeSetQuery = setQuery
             internal.update {
                 it.copy(
                     isLoadingSets = true,
@@ -512,7 +533,7 @@ class ExploreViewModel(
                 )
             }
             runCatching {
-                container.postRepository.getPostSets(nameQuery = snap.setQuery, page = page)
+                container.postRepository.getPostSets(nameQuery = activeSetQuery, page = page)
             }.onSuccess { fetched ->
                 internal.update { cur ->
                     val merged = if (reset) fetched else (cur.postSets + fetched).distinctBy { it.id }

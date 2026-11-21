@@ -64,9 +64,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -94,9 +96,16 @@ fun BlacklistScreen(
     onBack: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val inputText = viewModel.inputText
     val snackbarHostState = remember { SnackbarHostState() }
     var showClearConfirm by remember { mutableStateOf(false) }
     var showCompoundConfirm by remember { mutableStateOf<Boolean?>(null) } // Boolean = useOr
+    var inputFieldValue by remember {
+        mutableStateOf(TextFieldValue(text = inputText, selection = TextRange(inputText.length)))
+    }
+    if (inputFieldValue.text != inputText) {
+        inputFieldValue = TextFieldValue(text = inputText, selection = TextRange(inputText.length))
+    }
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { snackbarHostState.showSnackbar(it) }
@@ -261,8 +270,13 @@ fun BlacklistScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             OutlinedTextField(
-                                value = state.input,
-                                onValueChange = viewModel::onInputChange,
+                                value = inputFieldValue,
+                                onValueChange = { updated ->
+                                    inputFieldValue = updated
+                                    if (updated.text != inputText) {
+                                        viewModel.onInputChange(updated.text)
+                                    }
+                                },
                                 modifier = Modifier.weight(1f),
                                 placeholder = { Text("Add tags to compound (e.g. young -rating:s)") },
                                 singleLine = true,
@@ -272,7 +286,7 @@ fun BlacklistScreen(
                             )
                             Button(
                                 onClick = viewModel::saveRule,
-                                enabled = state.input.isNotBlank(),
+                                enabled = inputText.isNotBlank(),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Icon(
@@ -329,7 +343,8 @@ fun BlacklistScreen(
                         }
 
                         // Interactive Compound Token Chips + Live Plain-English Preview
-                        val terms = state.parsedTerms
+                        val terms = remember(inputText) { BlacklistEngine.parseTerms(inputText) }
+                        val liveDescription = remember(inputText) { BlacklistEngine.describeRule(inputText) }
                         if (terms.isNotEmpty()) {
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -365,9 +380,9 @@ fun BlacklistScreen(
                                 }
                             }
 
-                            if (state.liveDescription.isNotBlank()) {
+                            if (liveDescription.isNotBlank()) {
                                 Text(
-                                    text = "${state.liveDescription} · Tap a chip to cycle AND / EXCEPT / ANY",
+                                    text = "$liveDescription · Tap a chip to cycle AND / EXCEPT / ANY",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

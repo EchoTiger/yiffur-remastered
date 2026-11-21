@@ -111,6 +111,8 @@ fun PostFeedGrid(
     onOpenInBrowser: (Post) -> Unit,
     modifier: Modifier = Modifier,
     onNotInterested: ((Post) -> Unit)? = null,
+    scrollToPostId: Int? = null,
+    onScrollToPostConsumed: () -> Unit = {},
     budget: AdaptiveBudget = AdaptiveBudget.forTier(PerformanceTier.BALANCED, false),
     contentPadding: PaddingValues = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
     gridState: LazyGridState = rememberLazyGridState(),
@@ -122,6 +124,31 @@ fun PostFeedGrid(
     val context = LocalContext.current
 
     fun isFav(post: Post): Boolean = post.isFavorited || post.id in localFavoriteIds
+
+    // Sync gallery scroll position to the last post swiped in the fullscreen viewer (legacy Yiffur QoL)
+    LaunchedEffect(scrollToPostId, posts.size, settings.layoutMode) {
+        val targetId = scrollToPostId ?: return@LaunchedEffect
+        val targetIndex = posts.indexOfFirst { it.id == targetId }
+        if (targetIndex >= 0) {
+            when (settings.layoutMode) {
+                FeedLayoutMode.STAGGERED_GRID -> {
+                    val alreadyVisible = staggeredState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+                    if (!alreadyVisible) staggeredState.scrollToItem(targetIndex)
+                }
+                FeedLayoutMode.UNIFORM_GRID -> {
+                    val alreadyVisible = gridState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+                    if (!alreadyVisible) gridState.scrollToItem(targetIndex)
+                }
+                FeedLayoutMode.VERTICAL_LIST -> {
+                    val alreadyVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+                    if (!alreadyVisible) listState.scrollToItem(targetIndex)
+                }
+            }
+            onScrollToPostConsumed()
+        } else if (posts.isNotEmpty()) {
+            onScrollToPostConsumed()
+        }
+    }
 
     // Scroll-idle viewport prefetcher: warms the next `budget.prefetchCount` tiles ONLY when the user stops scrolling
     val prefetchAnchor by remember(settings.layoutMode, posts.size) {
